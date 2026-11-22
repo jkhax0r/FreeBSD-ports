@@ -118,7 +118,7 @@ class _PolicyRoots:
         self.suffixes = {}
         self.scan = []
         for policy in policies:
-            if len(policies) <= 4 or type(policy) is not Policy:
+            if type(policy) is not Policy or (len(policies) <= 4 and len(policy._suffixes) < 32):
                 self.scan.append(policy)
                 continue
             for pattern in policy._exact:

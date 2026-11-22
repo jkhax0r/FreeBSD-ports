@@ -8,7 +8,7 @@ file starts no process and changes no firewall, hook, service or TTL.
 import json
 import re
 from .checkpointfile import CheckpointFile
-from .leases import Policy
+from .leases import MAX_POLICY_PATTERNS, Policy
 
 FORMAT='dnsalias-policies-1'
 MAX_POLICIES=128
@@ -32,7 +32,7 @@ def validate(value):
             raise ValueError('distinct explicit policy and table identity required')
         names.add(name)
         patterns=policy['names']
-        if (type(patterns) is not list or not 1<=len(patterns)<=256
+        if (type(patterns) is not list or not 1<=len(patterns)<=MAX_POLICY_PATTERNS
             or any(type(p) is not str for p in patterns)
             or list(Policy(name,tuple(patterns)).patterns)!=patterns or len(set(patterns))!=len(patterns)):
             raise ValueError('normalized distinct saved names or patterns required')

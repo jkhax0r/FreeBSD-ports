@@ -15,6 +15,27 @@ class IndexedExistingBehaviorTests(fixtures.ProofTests):
 
 
 class IndexedProofDeltaTests(unittest.TestCase):
+    def test_single_large_policy_matches_at_bound(self):
+        patterns = tuple(
+            ("*." if i % 2 else "") + f"group{i}.example.com"
+            for i in range(2048)
+        )
+        policy = Policy("large", patterns)
+        ledger = IndexedProofLedger([policy])
+        for name, matched in (
+            ("group2046.example.com", True),
+            ("group2047.example.com", False),
+            ("leaf.deep.group2047.example.com", True),
+            ("leafgroup2047.example.com", False),
+            ("outside.example.com", False),
+        ):
+            with self.subTest(name=name):
+                roots = {(policy.name, name)} if matched else set()
+                self.assertEqual(ledger._policy_roots.matching(name), roots)
+                self.assertEqual(policy.matches(name), matched)
+        with self.assertRaises(ValueError):
+            Policy("large", patterns + ("overflow.example.com",))
+
     def test_indexed_patterns_after_edit_replace_and_restore(self):
         policies = [
             Policy('apex', ('EXAMPLE.com.',)),

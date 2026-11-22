@@ -12,15 +12,20 @@ import re
 from functools import lru_cache
 
 
-@lru_cache(maxsize=16384)
-def scope_name_keys(name):
-    """Pure name hashes, never a cached policy or dependency decision."""
+def _scope_name(name):
     if type(name) is not str or not 1<=len(name)<=254:
         raise ValueError('bounded DNS name required')
     name=name[:-1] if name.endswith('.') else name
     name=name.lower()
     if len(name)>253 or any(not re.fullmatch('[a-z0-9_-]{1,63}',p) for p in name.split('.')):
         raise ValueError('canonical ASCII DNS name required')
+    return name
+
+
+@lru_cache(maxsize=16384)
+def scope_name_keys(name):
+    """Pure name hashes, never a cached policy or dependency decision."""
+    name = _scope_name(name)
     keys=[hashlib.sha256(('e:'+name).encode('ascii')).digest()]
     # A wildcard does not match its own suffix apex.
     for position,char in enumerate(name):
@@ -28,12 +33,14 @@ def scope_name_keys(name):
     return tuple(keys)
 
 
+@lru_cache(maxsize=16384)
 def scope_policy_key(pattern):
-    if pattern.startswith('*.'):
-        name=pattern[2:]
-        scope_name_keys(name)  # Same bounded name validation.
-        return hashlib.sha256(('s:'+name.lower().rstrip('.')).encode('ascii')).digest()
-    return scope_name_keys(pattern)[0]
+    # A saved pattern contributes one key. Only observed names need hashes
+    # for every ancestor label when checking the published scope.
+    wildcard = pattern.startswith('*.')
+    name = _scope_name(pattern[2:] if wildcard else pattern)
+    prefix = 's:' if wildcard else 'e:'
+    return hashlib.sha256((prefix + name).encode('ascii')).digest()
 
 
 def scope_reply_keys(event):

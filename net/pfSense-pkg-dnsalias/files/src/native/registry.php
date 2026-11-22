@@ -18,7 +18,7 @@ function dnsalias_registry_policies($raw): array {
            !is_string($policy['name'])||!preg_match('/^[a-z][a-z0-9_]{0,22}$/D',$policy['name'])||
            str_starts_with($policy['name'],'seed')||str_starts_with($policy['name'],'mvp_')||isset($seen[$policy['name']])||
            !is_bool($policy['enabled'])||!is_array($policy['names'])||!array_is_list($policy['names'])||
-           count($policy['names'])<1||count($policy['names'])>256)throw new RuntimeException('Invalid saved DNS policy');
+           count($policy['names'])<1||count($policy['names'])>2048)throw new RuntimeException('Invalid saved DNS policy');
         $seen[$policy['name']]=true;$names=[];
         foreach($policy['names'] as $name){
             if(!is_string($name)||strlen($name)>255||!preg_match('/^(?:\*\.)?[a-z0-9_-]+(?:\.[a-z0-9_-]+)*$/D',$name)||isset($names[$name]))throw new RuntimeException('Invalid DNS pattern');

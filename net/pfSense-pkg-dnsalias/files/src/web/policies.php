@@ -46,7 +46,7 @@ function da_domain_alias_matches(string $domain,array $policies): ?array {
     $out=[];
     foreach($policies as $policy){
         if(!is_array($policy)||!is_string($policy['name']??null)||!preg_match('/^[a-z][a-z0-9_]{0,22}$/D',$policy['name'])||
-           !is_bool($policy['enabled']??null)||!is_array($policy['names']??null)||!array_is_list($policy['names'])||count($policy['names'])>256)
+           !is_bool($policy['enabled']??null)||!is_array($policy['names']??null)||!array_is_list($policy['names'])||count($policy['names'])>2048)
             throw new InvalidArgumentException('Invalid saved alias');
         $patterns=[];
         foreach($policy['names'] as $pattern){
@@ -122,9 +122,11 @@ function da_alias_service(string $op): array {
     $p=proc_open(['/usr/local/bin/python3.11','-B','-m',($boot||$native)?'dnsalias.serviceboot':'dnsalias.aliasservice',($boot?substr($op,5):($native?substr($op,8):$op))],
         [0=>['pipe','r'],1=>['pipe','w'],2=>['pipe','w']],$pipes,'/usr/local/libexec/dnsalias');
     if(!is_resource($p))throw new RuntimeException('Service control unavailable');
-    fclose($pipes[0]);$out=stream_get_contents($pipes[1],262145);$err=stream_get_contents($pipes[2],4097);
+    // Status includes applied names, PF members and service health.
+    $limit=$op==='status'?1048576:262144;
+    fclose($pipes[0]);$out=stream_get_contents($pipes[1],$limit+1);$err=stream_get_contents($pipes[2],4097);
     fclose($pipes[1]);fclose($pipes[2]);$code=proc_close($p);
-    if($code!==0||strlen($out)>262144)throw new RuntimeException('Alias service: '.substr($err,0,200));
+    if($code!==0||strlen($out)>$limit)throw new RuntimeException('Alias service: '.substr($err,0,200));
     return json_decode($out,true,32,JSON_THROW_ON_ERROR);
 }
 function da_alias_rule_index(array $rules): array {
@@ -236,7 +238,7 @@ function da_saved_aliases_render(array $policies,array $service,bool $can,string
         echo '<form class="da-alias-form" id="da-alias-editor" method="post" action="dnsalias_status.php?view=aliases"><h3>'.($edit?'Edit DNS alias':'Create DNS alias').'</h3>';
         echo '<input type="hidden" name="alias_editor_mode" value="'.($edit?'edit':'create').'">';
         if($edit)echo '<input type="hidden" name="alias_original_name" value="'.da_h($edit['name']).'">';
-        echo '<label>Alias name<input name="alias_name" pattern="(?:da_)?[a-z][a-z0-9_]{0,22}" maxlength="26" value="'.da_h($edit['name']??'').'" required '.($edit?'readonly':'').'></label><p class="da-help">'.($edit?'Firewall alias: <strong>'.da_h('da_'.$edit['name']).'</strong>.':'The <strong>da_</strong> prefix is added automatically. Enter <strong>example</strong> or <strong>da_example</strong> to create <strong>da_example</strong>.').'</p><label>DNS names and patterns<textarea name="alias_names" rows="4" maxlength="65536" required placeholder="example.com&#10;*.example.com">'.da_h(implode("\n",$editor_names)).'</textarea></label><p class="da-help">One name per line. *.example.com matches subdomains; add example.com separately for the base name.</p><label class="da-check"><input type="checkbox" name="alias_enabled" value="1" '.(!$edit||$edit['enabled']?'checked':'').'> Enable this alias</label><div class="da-form-actions"><button class="da-primary" name="alias_op" value="save">Save alias</button>';
+        echo '<label>Alias name<input name="alias_name" pattern="(?:da_)?[a-z][a-z0-9_]{0,22}" maxlength="26" value="'.da_h($edit['name']??'').'" required '.($edit?'readonly':'').'></label><p class="da-help">'.($edit?'Firewall alias: <strong>'.da_h('da_'.$edit['name']).'</strong>.':'The <strong>da_</strong> prefix is added automatically. Enter <strong>example</strong> or <strong>da_example</strong> to create <strong>da_example</strong>.').'</p><label>DNS names and patterns<textarea name="alias_names" rows="4" maxlength="65536" required placeholder="example.com&#10;*.example.com">'.da_h(implode("\n",$editor_names)).'</textarea></label><p class="da-help">Up to 2,048 names or wildcard patterns per alias. *.example.com matches subdomains; add example.com separately for the base name.</p><label class="da-check"><input type="checkbox" name="alias_enabled" value="1" '.(!$edit||$edit['enabled']?'checked':'').'> Enable this alias</label><div class="da-form-actions"><button class="da-primary" name="alias_op" value="save">Save alias</button>';
         if($edit)echo '<button class="da-delete" name="alias_op" value="delete" formnovalidate>Delete</button><a href="dnsalias_status.php?view=aliases">Cancel</a>';
         echo '</div></form>';
     }

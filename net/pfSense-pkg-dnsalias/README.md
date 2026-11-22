@@ -28,6 +28,8 @@ Multiple names and clients can contribute to the same destination table.
 Stopping the service empties its tables. Rule order determines what then
 happens to new traffic. Shared CDN addresses can match several domains.
 
+Lists accept up to 2,048 exact names and wildcard patterns per alias. The editor accepts 64 KiB of text per save, and the full saved policy list is limited to 256 KiB of JSON. Before downgrading to 0.2.43 or earlier, split aliases with more than 256 entries and update their firewall references.
+
 ## Qualification
 
 Resolver reload, native upgrade and removal were tested with the original

@@ -37,6 +37,9 @@ ROOT=Path('/usr/local/libexec/dnsalias')
 DATA=Path('/var/db/dnsalias')
 RUNTIME=Path('/var/run/dnsalias-aliases')
 CONFIG=Path('/cf/conf/config.xml')
+# Saving many names can take longer than a single DNS reply. Keep the
+# configuration transaction bounded within the independent watch interval.
+POLICY_APPLY_SECONDS = 1.0
 
 
 def config_identity():
@@ -52,7 +55,7 @@ def read_saved_for_refresh():
 
 def saved(root=ROOT):
     p=subprocess.run(['/usr/local/bin/php',str(root/'native/policies.php')],capture_output=True,text=True,timeout=2)
-    if p.returncode or len(p.stdout)>262144:raise ValueError('saved alias configuration unavailable: '+p.stderr[:160])
+    if p.returncode or len(p.stdout)>262144+128:raise ValueError('saved alias configuration unavailable: '+p.stderr[:160])
     value=json.loads(p.stdout)
     if value.get('format')!='dnsalias-saved-aliases-1':raise ValueError('saved aliases format changed')
     # Use the shared canonical Python name validator as a second boundary.
@@ -207,7 +210,9 @@ def run(*,confirmation_reuse=True,confirmation_refresh=True):
     native=writer=member=watcher=confirmation=refresh=None;descriptor=None;result=None;confirmation_descriptor=None
     try:
         last_config=config_identity()
-        configuration=saved(ROOT);active=[Policy(p['name'],tuple(p['names'])) for p in configuration if p['enabled']]
+        configuration=saved(ROOT)
+        configured=[Policy(p['name'],tuple(p['names'])) for p in configuration]
+        active=[policy for policy,entry in zip(configured,configuration) if entry['enabled']]
         if not configuration:raise ValueError('create an alias before starting the feed')
         inspected=target(ROOT,DATA)
         names=tuple('da_'+p['name'] for p in configuration)
@@ -246,11 +251,11 @@ def run(*,confirmation_reuse=True,confirmation_refresh=True):
         native=NativePFTables('',names,writable=True);native.enroll({n:set() for n in names})
         # Enroll all configured tables; disabled aliases are removed immediately
         # below, before processing the first DNS callback.
-        ledger=IndexedProofLedger([Policy(p['name'],tuple(p['names'])) for p in configuration],
+        ledger=IndexedProofLedger(configured,
             **({'before_commit':confirmation.authority.before_commit} if confirmation is not None else {}))
         writer=LeaseTableWriter(ledger,native,reload_lock_path='/tmp/filter.lock',membership_gate=member,allow_late_completion=True,
             confirmation=confirmation.authority if confirmation is not None else None)
-        writer.replace_policies(active,deadline=time.monotonic()+.08)
+        writer.replace_policies(active,deadline=time.monotonic()+POLICY_APPLY_SECONDS)
         feed=TrialFeed(writer,table_use='dns_aliases',persistent=True,confirmation_owner=confirmation)
         next_config=next_status=next_pulse=0
         refresh=PolicyRefresh(read_saved_for_refresh,config_identity)
@@ -291,7 +296,7 @@ def run(*,confirmation_reuse=True,confirmation_refresh=True):
                             if len(new_names)>128:raise ValueError('restart feed to retire deleted table identities')
                             _table_create(sorted(added));protect(new_names)
                             with member,writer.lock:native.extend_empty(new_names)
-                        writer.replace_policies([Policy(p['name'],tuple(p['names'])) for p in new if p['enabled']],deadline=time.monotonic()+.08)
+                        writer.replace_policies([Policy(p['name'],tuple(p['names'])) for p in new if p['enabled']],deadline=time.monotonic()+POLICY_APPLY_SECONDS)
                     except ReloadBusy:
                         # Only pre-processing lock refusal is retryable. Keep
                         # the accepted snapshot without repeated PHP reads;

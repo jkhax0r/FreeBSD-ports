@@ -43,6 +43,9 @@ def admissible_address(value):
     return str(address)
 
 
+MAX_POLICY_PATTERNS = 2048
+
+
 @dataclass(frozen=True)
 class Policy:
     name: str
@@ -55,8 +58,8 @@ class Policy:
         for p in self.patterns:
             wildcard = p.startswith("*.")
             normalized.append(("*." if wildcard else "") + dns_name(p[2:] if wildcard else p))
-        if not normalized or len(normalized) > 256:
-            raise ValueError("policy requires 1..256 exact names or suffix patterns")
+        if not normalized or len(normalized) > MAX_POLICY_PATTERNS:
+            raise ValueError(f"policy requires 1..{MAX_POLICY_PATTERNS} exact names or suffix patterns")
         object.__setattr__(self, "patterns", tuple(normalized))
         object.__setattr__(self, "_exact", frozenset(p for p in normalized if not p.startswith('*.')))
         object.__setattr__(self, "_suffixes", tuple(p[1:] for p in normalized if p.startswith('*.')))

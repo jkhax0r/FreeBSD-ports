@@ -77,7 +77,7 @@ function dnsalias_policies_read(): array {
         if(!is_array($p)||array_diff(array_keys($p),['name','names','enabled'])||count($p)!==3||
            !is_string($p['name'])||!preg_match('/^[a-z][a-z0-9_]{0,22}$/D',$p['name'])||
            str_starts_with($p['name'],'seed')||str_starts_with($p['name'],'mvp_')||isset($seen[$p['name']])||
-           !is_bool($p['enabled'])||!is_array($p['names'])||!array_is_list($p['names'])||count($p['names'])<1||count($p['names'])>256)
+           !is_bool($p['enabled'])||!is_array($p['names'])||!array_is_list($p['names'])||count($p['names'])<1||count($p['names'])>2048)
             throw new RuntimeException('Invalid saved alias policy');
         $seen[$p['name']]=true;$patterns=[];
         foreach($p['names'] as $n){
@@ -129,6 +129,7 @@ function dnsalias_policies_save(string $name,array $names,bool $enabled): void {
     $normalized=[];
     foreach($names as $n){if(!is_string($n))throw new RuntimeException('DNS name required');$n=strtolower(rtrim(trim($n),'.'));if($n!=='')$normalized[$n]=true;}
     $names=array_keys($normalized);
+    if(count($names)>2048)throw new RuntimeException('An alias accepts up to 2,048 distinct names or wildcard patterns');
     $policies=dnsalias_policies_read();dnsalias_policies_check($policies);
     $index=null;foreach($policies as $i=>$p)if($p['name']===$name)$index=$i;
     $new=['name'=>$name,'names'=>$names,'enabled'=>$enabled];

@@ -12,17 +12,29 @@ function da_alias_popup_payload(string $name,array $policies,array $service,int 
         'members'=>array_slice(array_keys($members),0,32),'observed_utc'=>$count!==null?$service['membership_observed_utc']:null];
 }
 function da_alias_pattern_sql(array $patterns,string $field,array &$params): string {
-    if(!in_array($field,['domain','query'],true)||!array_is_list($patterns)||count($patterns)<1||count($patterns)>256)
+    if(!in_array($field,['domain','query'],true)||!array_is_list($patterns)||count($patterns)<1||count($patterns)>2048)
         throw new InvalidArgumentException('Bounded saved DNS patterns required');
-    $parts=[];
-    foreach($patterns as $i=>$pattern){
+    $exact=[];$suffixes=[];
+    foreach($patterns as $pattern){
         if(!is_string($pattern)||strlen($pattern)>255||!preg_match('/^(?:\*\.)?[a-z0-9_-]+(?:\.[a-z0-9_-]+)*$/D',$pattern))
             throw new InvalidArgumentException('Invalid saved DNS pattern');
-        $slot=':pattern'.$i;
         if(str_starts_with($pattern,'*.')){
-            $params[$slot]=substr($pattern,1);
-            $parts[]="(length($field)>length($slot) AND substr($field,-length($slot))=$slot)";
-        }else{$params[$slot]=$pattern;$parts[]="$field=$slot";}
+            $suffix=substr($pattern,1);
+            $suffixes[strlen($suffix)][]=$suffix;
+        }else $exact[]=$pattern;
+    }
+    // SQLite builds an uncorrelated membership set once per suffix length.
+    // JSON array bindings also bound the number of SQL variables for large lists.
+    $membership=static function(string $column,string $slot,array $values)use(&$params):string{
+        if(count($values)===1){$params[$slot]=$values[0];return "$column=$slot";}
+        $params[$slot]=json_encode($values,JSON_THROW_ON_ERROR);
+        return "$column IN (SELECT value FROM json_each($slot))";
+    };
+    $parts=[];
+    if($exact)$parts[]=$membership($field,':pattern_exact',$exact);
+    foreach($suffixes as $length=>$values){
+        $test=$membership("substr($field,-$length)",':pattern_suffix_'.$length,$values);
+        $parts[]="(length($field)>$length AND $test)";
     }
     return '('.implode(' OR ',$parts).')';
 }
