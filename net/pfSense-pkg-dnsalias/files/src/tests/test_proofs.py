@@ -3,6 +3,7 @@ import unittest
 
 from dnsalias.leases import Policy
 from dnsalias.proofs import ProofLedger
+from dnsalias.replynormalize import UnqualifiedReply, cname
 
 
 def record(name, value, ttl, identity, kind="A"):
@@ -15,6 +16,11 @@ def answer(query, records, now=0):
 
 
 class ProofTests(unittest.TestCase):
+    def test_cname_wire_labels_keep_their_boundaries(self):
+        self.assertEqual(cname(b'\x03www\x07example\x03com\x00'), 'www.example.com')
+        with self.assertRaises(UnqualifiedReply):
+            cname(b'\x0bwww.example\x03com\x00')
+
     def setUp(self):
         self.ledger = ProofLedger([Policy("media", ("a.zone.example.com", "b.zone.example.com")),
                                    Policy("other", ("b.zone.example.com",))])

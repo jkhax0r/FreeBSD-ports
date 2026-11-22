@@ -43,7 +43,10 @@ def cname(raw):
             return dns_name('.'.join(labels))
         if size>63 or pos+size>len(raw) or len(labels)>126:
             raise UnqualifiedReply('compressed or invalid CNAME')
-        labels.append(raw[pos:pos+size].decode('ascii'));pos+=size
+        label = raw[pos:pos+size]
+        if b'.' in label:
+            raise UnqualifiedReply('CNAME label cannot be represented as a hostname')
+        labels.append(label.decode('ascii'));pos+=size
     raise UnqualifiedReply('unterminated CNAME')
 
 

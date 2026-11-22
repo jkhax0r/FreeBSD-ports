@@ -15,6 +15,50 @@ class IndexedExistingBehaviorTests(fixtures.ProofTests):
 
 
 class IndexedProofDeltaTests(unittest.TestCase):
+    def test_indexed_patterns_after_edit_replace_and_restore(self):
+        policies = [
+            Policy('apex', ('EXAMPLE.com.',)),
+            Policy('children', ('*.example.com', '*.example.com')),
+            Policy('both', ('*.deep.example.com', 'host.deep.example.com')),
+            Policy('deep', ('deep.example.com',)),
+            Policy('empty', ('unused.example.com',)),
+        ]
+        ledger = IndexedProofLedger(policies)
+
+        def observe(name, expected, now):
+            reply = fixtures.answer(name, [fixtures.record(name, '192.0.2.1', 30, 'rr')], now)
+            ledger.observe_changes(reply, now, 1000 + now)
+            self.assertEqual({policy for policy, root in ledger.anchors if root == name.lower().rstrip('.')},
+                             set(expected))
+
+        observe('EXAMPLE.com.', ['apex'], 0)
+        observe('Deep.example.com.', ['children', 'deep'], 0)
+        observe('host.deep.example.com', ['children', 'both'], 0)
+        observe('x.' * 100 + 'deep.example.com', ['children', 'both'], 0)
+        observe('notdeep.example.com', ['children'], 0)
+        edited = [Policy('apex', ('new.example.com',)), *policies[1:]]
+        ledger.reconfigure_changes(edited, 1)
+        observe('example.com', [], 1)
+        observe('new.example.com', ['apex', 'children'], 1)
+        ledger.replace_policy_set(edited[:-1] + [Policy('added', ('*.deep.example.com',))], 2)
+        state = ledger.snapshot(2, 1002)
+        ledger.restore(state, 3, 1003, trusted_clock=True)
+        observe('another.deep.example.com', ['added', 'both', 'children'], 3)
+
+    def test_idle_expiry_keeps_observer_and_deadline_semantics(self):
+        notifications = []
+        ledger = IndexedProofLedger([Policy('one', ('example.com',))], before_commit=notifications.append)
+        self.assertIsNone(ledger.expire_changes(0)['next_deadline'])
+        reply = fixtures.answer('example.com', [fixtures.record('example.com', '192.0.2.1', 5, 'rr')])
+        ledger.observe_changes(reply, 0, 1000)
+        notifications.clear()
+        self.assertEqual(ledger.expire_changes(4.999)['next_deadline'], 5)
+        self.assertEqual(notifications, [])
+        with self.assertRaises(ValueError):
+            ledger.expire_changes(float('nan'))
+        self.assertEqual(ledger.expire_changes(5)['tables_removed'], {'one': {'192.0.2.1'}})
+        self.assertEqual(len(notifications), 1)
+
     def test_submicrosecond_shortening_preserves_graph_and_shared_ip_expiry(self):
         reference,indexed=self.pair()
         initial=[fixtures.answer('a.zone.example.com',[

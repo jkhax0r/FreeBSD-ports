@@ -1,8 +1,9 @@
 # DNS Alias
 
-This port prepares a pfSense package for review. Its runtime is based on DNS
-Alias 0.2.41, tested with pfSense 2.9.0, Unbound 1.26.1, FreeBSD 16 amd64
+DNS Alias 0.2.42 targets pfSense 2.9.0, Unbound 1.26.1, FreeBSD 16 amd64
 and CPython 3.11. The checked-in source includes the five C extensions.
+The firewall-table helper indexes exact names and wildcard suffixes for larger
+alias sets. CNAME targets must preserve their DNS label boundaries.
 
 ## Build
 

@@ -15,7 +15,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 import heapq
 
-from .leases import Lease, valid_clock
+from .leases import Lease, Policy, valid_clock
 from .proofs import ProofLedger, _lease_identity
 
 
@@ -110,6 +110,41 @@ class _OwnerView:
         return bucket.values() if bucket else default
 
 
+class _PolicyRoots:
+    """Map a canonical query to matching policy roots. Only configuration is stored."""
+
+    def __init__(self, policies):
+        self.exact = {}
+        self.suffixes = {}
+        self.scan = []
+        for policy in policies:
+            if len(policies) <= 4 or type(policy) is not Policy:
+                self.scan.append(policy)
+                continue
+            for pattern in policy._exact:
+                self.exact.setdefault(pattern, []).append(policy.name)
+            for suffix in set(policy._suffixes):
+                self.suffixes.setdefault(suffix, []).append(policy.name)
+        self.suffix_depths = {suffix.count(".") for suffix in self.suffixes}
+        self.max_suffix_depth = max(self.suffix_depths, default=0)
+
+    def matching(self, query):
+        roots = {(p.name, query) for p in self.scan if p.matches(query)}
+        for name in self.exact.get(query, ()):
+            roots.add((name, query))
+        # A wildcard can match only at its configured label depth. Starting at
+        # the right bounds the work even for names with many leading labels.
+        end = len(query)
+        for depth in range(1, self.max_suffix_depth + 1):
+            end = query.rfind(".", 0, end)
+            if end < 0:
+                break
+            if depth in self.suffix_depths:
+                for name in self.suffixes.get(query[end:], ()):
+                    roots.add((name, query))
+        return roots
+
+
 class IndexedProofLedger(ProofLedger):
     def __init__(self,*args,before_commit=None,**kwargs):
         if before_commit is not None and not callable(before_commit):
@@ -118,6 +153,7 @@ class IndexedProofLedger(ProofLedger):
         super().__init__(*args,**kwargs);self._reindex()
 
     def _reindex(self):
+        self._policy_roots = _PolicyRoots(self.policies)
         self._owners={};self._parents={};self._roots={};self._root_leases={}
         self._members={p.name:{} for p in self.policies};self._deadlines=_Deadlines()
         # No second index or callback work for the ordinary, disabled path.
@@ -256,13 +292,20 @@ class IndexedProofLedger(ProofLedger):
 
     def _apply(self,parsed_answer,now,*,policies=None):
         if self._notifying:raise RuntimeError('commit observers must not mutate the ledger')
+        if parsed_answer is None and policies is None:
+            next_deadline = self._deadlines.next
+            if next_deadline is None or next_deadline > now:
+                return self._empty_change(next_deadline)
         # Policy edits are occasional owner-loop work. They may change matching
         # names, never table identities. New roots require a subsequent actual
         # query; a retained CNAME owner is not evidence it was queried itself.
         walker=self if policies is None else ProofLedger(policies,self.max_proofs,self.max_leases,self.max_walk)
-        policy_by_name={p.name:p for p in walker.policies}
-        if set(policy_by_name)!=set(self._members):raise ValueError('policy edits cannot change table identities')
-        invalid_roots={root for root in self.anchors if not policy_by_name[root[0]].matches(root[1])} if policies is not None else set()
+        invalid_roots=set()
+        if policies is not None:
+            policy_by_name={p.name:p for p in walker.policies}
+            if policy_by_name.keys()!=self._members.keys():raise ValueError('policy edits cannot change table identities')
+            invalid_roots={root for root in self.anchors if not policy_by_name[root[0]].matches(root[1])}
+            edited_roots = _PolicyRoots(walker.policies)
         expired=self._deadlines.due(now);updates={}
         query,parsed=parsed_answer if parsed_answer is not None else (None,())
         for proof in parsed:
@@ -276,12 +319,12 @@ class IndexedProofLedger(ProofLedger):
         # Ignore unchanged cache proofs: no stale heap entries or full scans.
         updates={key:proof for key,proof in updates.items() if key in expired or self.proofs.get(key)!=proof}
         owners={self.proofs[key].name for key in expired}|{p.name for p in updates.values()}
-        new_roots={(p.name,query) for p in self.policies if query is not None and p.matches(query)}-self.anchors
+        new_roots=self._policy_roots.matching(query)-self.anchors if query is not None else set()
         if not owners and not new_roots and not invalid_roots:
             if policies is not None:
                 if walker.policies!=self.policies:
                     self._before_commit(set(),{},policies_changed=True)
-                self.policies=walker.policies
+                self.policies, self._policy_roots = walker.policies, edited_roots
             return self._empty_change(self._deadlines.next)
         if (policies is None and not new_roots
                 and all(not self._parents.get(name) for name in owners)
@@ -312,7 +355,8 @@ class IndexedProofLedger(ProofLedger):
         # Commit after all bounded parsing, graph derivation and capacity checks.
         self._before_commit(expired,updates,policies_changed=walker.policies!=self.policies,
             memberships_changed=bool(tables_added or tables_removed))
-        if policies is not None:self.policies=walker.policies
+        if policies is not None:
+            self.policies, self._policy_roots = walker.policies, edited_roots
         self._deadlines.remove_many(expired)
         if self._utc_deadlines is not None:self._utc_deadlines.remove_many(expired)
         for key in expired:
