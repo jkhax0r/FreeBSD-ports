@@ -1,0 +1,2 @@
+# Runtime ownership receipts include source byte hashes.
+files/src/** -text

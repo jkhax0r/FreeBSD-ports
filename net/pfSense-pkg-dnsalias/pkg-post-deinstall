@@ -1,0 +1,23 @@
+#!/bin/sh
+/usr/local/bin/python3.11 -B -c 'import json,os,stat,sys
+from pathlib import Path
+path=Path('"'"'/var/db/dnsalias-package/state.json'"'"');root=Path('"'"'/usr/local/libexec/dnsalias'"'"')
+def identity(i):return (i.st_dev,i.st_ino,i.st_uid,i.st_gid,i.st_mode,i.st_nlink,i.st_size,i.st_mtime_ns,i.st_ctime_ns)
+try:
+ parent=path.parent;pi=parent.lstat()
+ if parent.resolve()!=parent or not stat.S_ISDIR(pi.st_mode) or pi.st_uid!=0 or pi.st_gid!=0 or stat.S_IMODE(pi.st_mode)!=0o700:raise ValueError()
+ before=path.lstat()
+ if not stat.S_ISREG(before.st_mode) or before.st_uid!=0 or before.st_gid!=0 or stat.S_IMODE(before.st_mode)!=0o600 or before.st_nlink!=1 or not 0<before.st_size<=65536:raise ValueError()
+ fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_CLOEXEC)
+ try:
+  if identity(os.fstat(fd))!=identity(before):raise ValueError()
+  raw=os.read(fd,65537)
+  if len(raw)!=before.st_size or identity(os.fstat(fd))!=identity(before) or identity(path.lstat())!=identity(before):raise ValueError()
+ finally:os.close(fd)
+ value=json.loads(raw)
+ if identity(parent.lstat())!=identity(pi) or type(value) is not dict or any(value.get(k)!=v for k,v in {'"'"'format'"'"':'"'"'dnsalias-package-owner-1'"'"','"'"'phase'"'"':'"'"'removed'"'"','"'"'prefix'"'"':'"'"'/usr/local'"'"','"'"'root'"'"':'"'"'/usr/local/libexec/dnsalias'"'"','"'"'data'"'"':'"'"'/var/db/dnsalias'"'"'}.items()) or root.exists() or root.is_symlink():raise ValueError()
+except Exception:
+ print('"'"'DNS Alias native package record retained; inspect removal receipts.'"'"',file=sys.stderr);sys.exit(1)
+' || exit $?
+[ -x /etc/rc.packages ] || { echo "DNS Alias native package dispatcher unavailable" >&2; exit 1; }
+exec /etc/rc.packages pfSense-pkg-dnsalias POST-DEINSTALL

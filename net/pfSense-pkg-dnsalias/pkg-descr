@@ -1,0 +1,9 @@
+DNS Alias populates separate PF destination tables from trusted Unbound replies.
+Define exact DNS names or wildcard subdomains and select the resulting aliases
+in ordinary pfSense rules. Each observed mapping retains its own remaining DNS
+TTL. Clients can share a table across interfaces while each firewall rule
+controls its source, ports and action.
+
+The package includes a WebGUI for alias management, DNS observations and
+firewall statistics. Plain Unbound is supported. Fresh installations start
+disabled and create no traffic rules.

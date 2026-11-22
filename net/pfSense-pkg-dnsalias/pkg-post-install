@@ -1,0 +1,4 @@
+#!/bin/sh
+/usr/local/bin/python3.11 -B /usr/local/share/dnsalias/bootstrap.py sync --prefix /usr/local || exit $?
+[ -x /etc/rc.packages ] || { echo "DNS Alias native package dispatcher unavailable" >&2; exit 1; }
+exec /etc/rc.packages pfSense-pkg-dnsalias POST-INSTALL

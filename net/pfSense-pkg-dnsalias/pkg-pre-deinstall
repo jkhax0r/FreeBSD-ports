@@ -1,0 +1,4 @@
+#!/bin/sh
+[ -x /etc/rc.packages ] || { echo "DNS Alias native package dispatcher unavailable" >&2; exit 1; }
+/etc/rc.packages pfSense-pkg-dnsalias DEINSTALL || exit $?
+exec /usr/local/bin/python3.11 -B /usr/local/share/dnsalias/bootstrap.py catalog-pre-remove --prefix /usr/local

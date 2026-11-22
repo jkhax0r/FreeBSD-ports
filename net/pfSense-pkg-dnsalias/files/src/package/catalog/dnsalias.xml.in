@@ -1,0 +1,13 @@
+<?xml version="1.0"?>
+<packagegui>
+  <name>dnsalias</name>
+  <title>DNS Aliases</title>
+  <version>@@VERSION@@</version>
+  <include_file>@@PREFIX@@/pkg/dnsalias.inc</include_file>
+  <!-- The owned coordinator registers menu/service entries. Declarative
+       entries would let native removal unlink the rc file before preflight. -->
+  <custom_php_install_command>dnsalias_package_install();</custom_php_install_command>
+  <custom_php_resync_config_command>dnsalias_package_resync();</custom_php_resync_config_command>
+  <custom_php_deinstall_command>dnsalias_package_remove();</custom_php_deinstall_command>
+  <custom_php_command_before_form><![CDATA[header('Location: /dnsalias_status.php?view=aliases'); exit;]]></custom_php_command_before_form>
+</packagegui>

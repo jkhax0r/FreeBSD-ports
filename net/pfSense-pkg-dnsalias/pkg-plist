@@ -1,0 +1,9 @@
+@(root,wheel,0600) pkg/dnsalias.inc
+@(root,wheel,0600) pkg/dnsalias.xml
+@(root,wheel,0600) share/dnsalias/bootstrap.py
+@(root,wheel,0600) share/dnsalias/gui/gui.py
+@(root,wheel,0600) share/dnsalias/gui/registration.py
+@(root,wheel,0600) share/dnsalias/gui/registration_native.py
+@(root,wheel,0600) share/dnsalias/gui/setup_native.py
+@(root,wheel,0600) share/dnsalias/payload.zip
+@(root,wheel,0600) share/pfSense-pkg-dnsalias/info.xml

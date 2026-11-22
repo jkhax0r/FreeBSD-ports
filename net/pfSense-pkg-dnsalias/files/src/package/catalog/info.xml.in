@@ -1,0 +1,11 @@
+<?xml version="1.0"?>
+<pfsensepkgs>
+  <package>
+    <name>dnsalias</name>
+    <descr>DNS-fed destination aliases populated from trusted resolver replies. Uses ordinary firewall rules and independent remaining-TTL leases. Experimental local package.</descr>
+    <pkginfolink></pkginfolink>
+    <version>@@VERSION@@</version>
+    <configurationfile>dnsalias.xml</configurationfile>
+    <after_install_info>Open Firewall - DNS Aliases. Fresh setup is disabled and creates no traffic rules. Save aliases and use DNS Alias settings to enable the service. On supported plain Unbound with no selected Python hook, first enable configures the owned hook and applies the resolver once. Existing Python selections are preserved and checked for compatibility.</after_install_info>
+  </package>
+</pfsensepkgs>
