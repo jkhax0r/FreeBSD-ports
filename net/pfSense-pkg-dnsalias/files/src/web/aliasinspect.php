@@ -38,6 +38,45 @@ function da_alias_pattern_sql(array $patterns,string $field,array &$params): str
     }
     return '('.implode(' OR ',$parts).')';
 }
+function da_alias_domain_filter(SQLite3 $db,array $patterns,string $dns_scope,array &$params): string {
+    $bindings=[];
+    $predicate=da_alias_pattern_sql($patterns,'domain',$bindings);
+    foreach($patterns as $pattern){
+        if(!str_starts_with($pattern,'*.'))continue;
+        // Check each retained name once when the covering index yields a small set.
+        // A large history or an older schema keeps the ordinary event query.
+        if(SQLite3::version()['versionNumber']>=3035000 &&
+            $db->querySingle("SELECT 1 FROM sqlite_master WHERE type='index' AND name='event_domain_evidence'")){
+            $sql="WITH observed AS MATERIALIZED (
+                SELECT DISTINCT domain FROM events WHERE $dns_scope AND domain IS NOT NULL LIMIT 513
+            ) SELECT CASE WHEN count(*)<=512 AND coalesce(sum(length(CAST(domain AS BLOB))),0)<=131072
+                THEN (SELECT json_group_array(domain) FROM observed WHERE $predicate) END AS names FROM observed";
+            $names=da_rows($db,$sql,$bindings)[0]['names'];
+            if($names!==null){
+                $params[':observed_domains']=$names;
+                return 'domain IN (SELECT value FROM json_each(:observed_domains))';
+            }
+        }
+        break;
+    }
+    $params+=$bindings;
+    return $predicate;
+}
+function da_alias_packet_counts(SQLite3 $db,string $list,array $params): array {
+    $select="SELECT json_extract(body,'$.destination') AS ip,sum(action='pass') AS pass,
+        sum(action='block') AS block,count(*) AS n FROM events WHERE kind='firewall_packet'
+        AND time>=:since AND time<=:until AND json_extract(body,'$.destination') IN ($list)";
+    if(!$db->querySingle("SELECT 1 FROM sqlite_master WHERE type='index' AND name='event_packet_nonweb_counts'"))
+        return da_rows($db,$select.' GROUP BY ip',$params);
+    // The web index covers TCP/UDP 80 and 443. The complementary index includes
+    // every other logged port/protocol, including records with an unknown value.
+    $web="json_extract(body,'$.destination_port') IN (80,443) AND json_extract(body,'$.protocol') IN ('tcp','udp')";
+    $other="($web) IS NOT 1 AND json_type(body,'$.destination')='text'
+        AND length(CAST(json_extract(body,'$.destination') AS BLOB)) BETWEEN 2 AND 45";
+    return da_rows($db,"SELECT ip,sum(pass) AS pass,sum(block) AS block,sum(n) AS n FROM (
+        $select AND $web GROUP BY ip UNION ALL $select AND $other GROUP BY ip
+    ) GROUP BY ip",$params);
+}
 function da_alias_members_model(string $directory,array $policy,array $service,int $now,int $window): array {
     $table='da_'.$policy['name'];$health=da_alias_health($service,(float)$now);
     $v=['table'=>$table,'policy'=>$policy,'current'=>da_alias_live_count($table,$service,$health)!==null,
@@ -52,16 +91,20 @@ function da_alias_members_model(string $directory,array $policy,array $service,i
         $path=$directory.'/events.sqlite';
         if(is_link($path)||!is_file($path)||filesize($path)>67108864)throw new RuntimeException('Telemetry unavailable');
         $db=new SQLite3($path,SQLITE3_OPEN_READONLY);$db->enableExceptions(true);$db->busyTimeout(250);
+        // Retention may run between name discovery and the domain totals.
+        $db->exec('BEGIN');
         $params=[':since'=>$now-$v['window']*60,':until'=>$now];
-        $where=da_alias_pattern_sql($policy['names'],'domain',$params);
+        $dns_scope="kind IN ('dns_query','dns_reply_log','dns_policy_log','dns_reply')";
+        $where=da_alias_domain_filter($db,$policy['names'],$dns_scope,$params);
         // Match the EventStore partial index predicate so exact names can seek by domain and time.
-        $v['domains']=da_rows($db,"SELECT domain,sum(kind='dns_query') AS queries,sum(kind='dns_reply') AS replies,sum(kind='dns_reply_log') AS reply_logs,sum(kind='dns_policy_log') AS policy_logs,max(time) AS latest FROM events WHERE kind IN ('dns_query','dns_reply_log','dns_policy_log','dns_reply') AND time>=:since AND time<=:until AND $where GROUP BY domain ORDER BY replies DESC,queries DESC,domain LIMIT 101",$params);
+        $v['domains']=da_rows($db,"SELECT domain,sum(kind='dns_query') AS queries,sum(kind='dns_reply') AS replies,sum(kind='dns_reply_log') AS reply_logs,sum(kind='dns_policy_log') AS policy_logs,max(time) AS latest FROM events WHERE $dns_scope AND time>=:since AND time<=:until AND $where GROUP BY domain ORDER BY replies DESC,queries DESC,domain LIMIT 101",$params);
+        $db->exec('COMMIT');
         $v['statistics_available']=true;
         if($v['members']){
             $slots=[];$ips=[':since'=>$params[':since'],':until'=>$now];
             foreach($v['members'] as $i=>$ip){$slot=':ip'.$i;$slots[]=$slot;$ips[$slot]=$ip;}
             $list=implode(',',$slots);
-            foreach(da_rows($db,"SELECT json_extract(body,'$.destination') AS ip,sum(action='pass') AS pass,sum(action='block') AS block,count(*) AS n FROM events WHERE kind='firewall_packet' AND time>=:since AND time<=:until AND json_extract(body,'$.destination') IN ($list) GROUP BY ip",$ips) as $r)$v['packets'][$r['ip']]=$r;
+            foreach(da_alias_packet_counts($db,$list,$ips) as $r)$v['packets'][$r['ip']]=$r;
             $v['answer_history_available']=(int)$db->querySingle("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='reply_answers'")===1;
             if($v['answer_history_available']){
                 $matching=da_alias_pattern_sql($policy['names'],'query',$ips);

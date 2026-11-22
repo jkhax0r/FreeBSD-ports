@@ -106,10 +106,37 @@ class EventStore:
                 from .answerhistory import AnswerHistory
                 self.answer_history=AnswerHistory(self.db)
             self.db.commit()
+            self._prepare_packet_address_index()
             os.chmod(self.path,0o600)
         except Exception:
             self.db.close()
             raise
+
+    def _prepare_packet_address_index(self):
+        """Index the remaining logged ports for the on-demand alias member counts."""
+        if self.db.execute("SELECT 1 FROM sqlite_master WHERE type='index' AND name='event_packet_nonweb_counts'").fetchone():
+            return
+        pages = self.db.execute("PRAGMA page_count").fetchone()[0]
+        free = self.db.execute("PRAGMA freelist_count").fetchone()[0]
+        # Leave working space for collection in a small or nearly full database.
+        # A member page can always use the original time-range query.
+        if (self.max_pages - pages + free) * self.page_size < max(1048576, self.max_events * 256):
+            return
+        try:
+            with self.db:
+                self.db.execute("BEGIN IMMEDIATE")
+                self.db.execute("""
+                    CREATE INDEX IF NOT EXISTS event_packet_nonweb_counts
+                    ON events(json_extract(body,'$.destination'),time,action='pass',action='block')
+                    WHERE kind='firewall_packet'
+                    AND (json_extract(body,'$.destination_port') IN (80,443)
+                         AND json_extract(body,'$.protocol') IN ('tcp','udp')) IS NOT 1
+                    AND json_type(body,'$.destination')='text'
+                    AND length(CAST(json_extract(body,'$.destination') AS BLOB)) BETWEEN 2 AND 45
+                """)
+        except sqlite3.OperationalError as error:
+            if (error.sqlite_errorcode & 255) not in (sqlite3.SQLITE_FULL, sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
+                raise
 
     def insert(self, events, now=None):
         if len(events) > min(MAX_BATCH_EVENTS,self.max_events):
