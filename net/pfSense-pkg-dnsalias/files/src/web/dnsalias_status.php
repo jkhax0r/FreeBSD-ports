@@ -125,6 +125,11 @@ if($da_view['view']==='aliases'&&is_string($_GET['inspect_members']??null)){
     }
 }
 $da_view['identity_pending']=($da_view['client']!=='' || in_array($da_view['view'],['overview','clients','client','domain','ip'],true)) && !$da_view['errors'] && da_queue_identity('/var/db/dnsalias',$da_view['status'],time());
+$da_fragment=($_SERVER['REQUEST_METHOD']??'GET')==='GET' && $da_view['view']==='client' && ($_SERVER['HTTP_X_DNSALIAS_FRAGMENT']??'')==='client';
+if($da_fragment){
+    header('Content-Type: text/html; charset=utf-8');header('Cache-Control: no-store');
+    da_render($da_view,true);exit;
+}
 include("head.inc");
 da_render($da_view);
 include("foot.inc");

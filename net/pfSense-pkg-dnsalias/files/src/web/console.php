@@ -102,7 +102,7 @@ function da_retention($status) {
     }
     echo '<p class="da-footnote">All collected sources are included; page filters do not narrow these counts. Every record still expires after 24 hours. Each log type can cover a different time range; the oldest record does not prove continuous coverage. Missing records are unknown, not zero traffic. Previously removed records are not recovered.</p></div>';
 }
-function da_render($v) {
+function da_render($v, $fragment=false) {
     if(function_exists('da_policy_history_read')){
         try{$v['policy_history']=da_policy_history_read($v['data_directory']??'/var/db/dnsalias',$v['now']);}
         catch(Throwable $e){$v['policy_history']=[];$v['policy_history_error']=true;}
@@ -114,7 +114,7 @@ function da_render($v) {
     $reply_health=$v['reply_health']??da_reply_health([],(float)$v['now'],'missing');
     $views=['overview'=>'Overview','clients'=>'Clients','client'=>'Client inspect','domains'=>'Domains','domain'=>'Domain inspect','ip'=>'IP inspect','activity'=>'Activity','blocks'=>'Blocked','rules'=>'Rules','aliases'=>'Aliases','coverage'=>'Coverage'];
     $window=[15=>'Last 15 minutes',60=>'Last hour',1440=>'Last 24 hours'][$v['window']];
-    require __DIR__.'/style.php';
+    if(!$fragment)require __DIR__.'/style.php';
     ?>
     <section id="da-console" data-identity-pending="<?=!empty($v['identity_pending'])?'1':'0'?>" data-identity-observed="<?=da_h($s['client_identity']['observed_utc']??0)?>" data-view="<?=da_h($v['view'])?>" data-status-time="<?=da_h($s['updated_utc']??0)?>" data-status-age="<?=da_h($v['status_age']??30)?>" data-running="<?=$fresh?'1':'0'?>">
       <header class="da-header"><div><div class="da-eyebrow">NETWORK VISIBILITY</div><h1>DNS Alias <span>Activity console</span></h1></div><div class="da-status"><a href="<?=da_h(da_url($v,['view'=>'coverage','before'=>'','asof'=>'']))?>" data-nav="coverage" class="da-pill <?=$fresh?'da-live':'da-warn'?>" id="da-health-badge"><span aria-hidden="true">●</span> <?=$fresh?'Collector live':'Collector stale / unavailable'?></a><a href="<?=da_h(da_url($v,['view'=>'aliases','before'=>'','asof'=>'']))?>" data-nav="aliases" class="da-pill da-neutral"><?=function_exists('da_saved_aliases_render')?'DNS aliases':($namedPolicy?'Alias block policy':($observationSession?'DNS reply session':($trialPresent?'Short block trial':'Observation only')))?></a></div></header>
@@ -167,5 +167,5 @@ function da_render($v) {
       <dialog id="da-policy-dialog" aria-labelledby="da-policy-title"><div class="da-dialog-header"><div><div class="da-eyebrow">CLIENT POLICY REVIEW</div><h2 id="da-policy-title">Review policy draft</h2></div><button type="button" id="da-close-policy" aria-label="Close policy review">✕</button></div><dl id="da-policy-fields"></dl><p class="da-notice" id="da-policy-impact"></p><p class="da-footnote">The selected source is a logged address; verify the device/interface before applying. Existing rule order, earlier denies and live states must be checked. Removing a name from an allowlist does not guarantee a block if another valid name still permits the same IP. Shared destination tables may be populated by any trusted client; the firewall rule limits the source.</p><div class="da-policy-buttons"><button type="button" class="da-primary" id="da-download-draft">Download draft</button><button type="button" disabled title="This draft action is outside the admitted named block controls">Apply unavailable</button></div><p class="da-footnote">This draft is saved only to your browser’s downloads and is not installed. Add DNS names through Aliases. Ordinary firewall rules decide sources, ports and pass/block. This IP-only draft is not applied.</p></dialog>
       <noscript><div class="da-notice">Navigation and filters work without JavaScript. Enable JavaScript for sorting, local timestamps and event details.</div></noscript>
     </section>
-    <?php require __DIR__.'/client.php';
+    <?php if(!$fragment)require __DIR__.'/client.php';
 }

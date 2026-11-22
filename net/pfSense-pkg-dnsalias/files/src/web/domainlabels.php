@@ -149,10 +149,23 @@ function da_labels_snapshot(string $data,array $domains=[]): array {
         $db=da_labels_open($layout);$db->exec('BEGIN');
         $rows=$db->query('SELECT DISTINCT tag FROM domain_tags ORDER BY tag LIMIT 128');while($row=$rows->fetchArray(SQLITE3_NUM))$out['tags'][]=$row[0];$rows->finalize();
         if(count($domains)>500)throw new InvalidArgumentException('Bounded domain label lookup required.');
-        foreach(array_unique($domains) as $domain){
+        $names=[];
+        foreach($domains as $domain){
             try{$domain=da_labels_domain($domain);}catch(InvalidArgumentException $e){continue;}
-            $p=$db->prepare('SELECT review,updated_utc FROM domain_labels WHERE domain=:domain');$p->bindValue(':domain',$domain,SQLITE3_TEXT);$rows=$p->execute();$label=$rows->fetchArray(SQLITE3_ASSOC);$rows->finalize();$p->close();
-            if(!$label)continue;$label['tags']=[];$p=$db->prepare('SELECT tag FROM domain_tags WHERE domain=:domain ORDER BY tag');$p->bindValue(':domain',$domain,SQLITE3_TEXT);$rows=$p->execute();while($r=$rows->fetchArray(SQLITE3_NUM))$label['tags'][]=$r[0];$rows->finalize();$p->close();$out['labels'][$domain]=$label;
+            $names[$domain]=true;
+        }
+        if($names){
+            $slots=implode(',',array_fill(0,count($names),'?'));
+            $p=$db->prepare("SELECT l.domain,l.review,l.updated_utc,t.tag FROM domain_labels l LEFT JOIN domain_tags t ON t.domain=l.domain WHERE l.domain IN ($slots) ORDER BY l.domain,t.tag");
+            foreach(array_keys($names) as $i=>$name)$p->bindValue($i+1,$name,SQLITE3_TEXT);
+            $rows=$p->execute();$found=[];
+            while($row=$rows->fetchArray(SQLITE3_ASSOC)){
+                $name=$row['domain'];
+                $found[$name]??=['review'=>$row['review'],'updated_utc'=>$row['updated_utc'],'tags'=>[]];
+                if($row['tag']!==null)$found[$name]['tags'][]=$row['tag'];
+            }
+            $rows->finalize();$p->close();
+            foreach($names as $name=>$_)if(isset($found[$name]))$out['labels'][$name]=$found[$name];
         }
         $db->exec('COMMIT');return $out;
     }finally{if($db!==null)$db->close();flock($lock,LOCK_UN);fclose($lock);}

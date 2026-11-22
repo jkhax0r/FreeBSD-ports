@@ -100,7 +100,6 @@ function da_load($directory, $query, $now) {
         $db->busyTimeout(250);
         if(in_array($v['view'],['overview','clients','client','domains','domain'],true)){
             try{
-                $v['labels']=da_labels_snapshot($directory);
                 if(da_labels_filter_active($v)&&in_array($v['view'],['overview','client','domains'],true))$v['labels_joined']=da_labels_attach($db,$directory);
             }catch(Throwable $e){$v['labels']['available']=false;$v['labels_error']='Domain labels are unavailable. Review/tag filters are not applied.';}
         }
@@ -173,7 +172,8 @@ function da_load($directory, $query, $now) {
             $limit=$v['view']==='overview'?5:100;
             $v['blocks'] = da_rows($db, "SELECT json_extract(body,'$.destination') AS destination,tracker,count(*) AS n,count(DISTINCT client) AS clients,max(time) AS latest FROM events WHERE ".$webwhere." AND action='block' GROUP BY destination,tracker ORDER BY n DESC,destination,tracker LIMIT ".$limit, $webparams);
         }
-        $v['retention'] = da_rows($db, 'SELECT min(time) AS oldest,max(time) AS newest,count(*) AS n FROM events', [])[0];
+        // Independent aggregates let SQLite seek the endpoints of the time index.
+        $v['retention'] = da_rows($db, 'SELECT (SELECT min(time) FROM events) AS oldest,(SELECT max(time) FROM events) AS newest,(SELECT count(*) FROM events) AS n', [])[0];
         if (in_array($v['view'],['overview','coverage'],true)) {
         $available=da_rows($db, "SELECT count(*) AS n FROM sqlite_master WHERE type='table' AND name IN ('hourly_counts','hourly_coverage')",[])[0]['n'];
         if ($available===2) {

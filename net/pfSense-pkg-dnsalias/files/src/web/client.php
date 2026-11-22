@@ -28,12 +28,16 @@
     for (const panel of panels.filter(p=>p.dataset.panel===root.dataset.view)) for (const table of panel.querySelectorAll('table')) {
       const rows=[...table.querySelectorAll('tbody [data-row]')];
       if(!rows.length)continue; // Native alias forms/tables do not use this search.
-      rows.forEach(row=>{if(!searchText.has(row))searchText.set(row,row.textContent.toLowerCase());row.hidden=!searchText.get(row).includes(value);});
+      rows.forEach(row=>{
+        if(value&&!searchText.has(row))searchText.set(row,row.textContent.toLowerCase());
+        const hidden=!!value&&!searchText.get(row).includes(value);
+        if(row.hidden!==hidden)row.hidden=hidden;
+      });
       const notice=table.parentElement.nextElementSibling;
       if(notice?.classList.contains('da-search-empty'))notice.hidden=rows.some(r=>!r.hidden);
     }
   };
-  const show = (name, update=true) => {
+  const show = name => {
     if (!names.has(name)) name='overview';
     if (!panels.some(p=>p.dataset.panel===name)) {location.assign(root.querySelector('.da-nav [data-nav="'+name+'"]').href);return;}
     root.dataset.view=name;
@@ -44,15 +48,20 @@
     const searchTools=root.querySelector('.da-table-tools');
     if(searchTools)searchTools.hidden=['overview','aliases'].includes(name);
     if(search)search.value='';applySearch();
-    if(update) {const u=new URL(location.href);u.searchParams.set('view',name);u.hash='';history.replaceState(null,'',u);}
     root.querySelector('#da-refresh-now').href=location.href;
   };
   root.classList.add('da-js');
   // Only known navigation names are view hashes. Editor/reference fragments
   // identify elements within the selected view and must not hide that view.
   const hashView=location.hash.startsWith('#da-')?location.hash.slice(4):null;
-  show(names.has(hashView)?hashView:root.dataset.view,false);
-  root.querySelectorAll('[data-nav]').forEach(a=>a.addEventListener('click',e=>{e.preventDefault();show(a.dataset.nav);}));
+  show(names.has(hashView)?hashView:root.dataset.view);
+  root.querySelectorAll('[data-nav]').forEach(a=>a.addEventListener('click',e=>{
+    if(e.defaultPrevented||e.button!==0||e.ctrlKey||e.metaKey||e.shiftKey||e.altKey)return;
+    if(!panels.some(p=>p.dataset.panel===a.dataset.nav))return;
+    if(a.dataset.nav===root.dataset.view)return;
+    e.preventDefault();show(a.dataset.nav);history.pushState({dnsAliasPanel:true},'',a.href);
+    root.querySelector('#da-refresh-now').href=location.href;
+  }));
   if(search)search.addEventListener('input',applySearch);
   root.addEventListener('keydown',e=>{if(e.key==='Escape'&&document.activeElement===search){search.value='';applySearch();}});
   root.addEventListener('click',e=>{
@@ -62,17 +71,21 @@
     table.querySelectorAll('th').forEach(h=>h.setAttribute('aria-sort','none'));
     th.setAttribute('aria-sort',descending?'descending':'ascending');
     const rows=[...table.tBodies[0].querySelectorAll('[data-row]')];
-    const val=row=>{const c=row.cells[index];return c.dataset.order??c.querySelector('[data-utc]')?.dataset.utc??c.textContent.trim();};
-    rows.sort((a,b)=>{const x=val(a),y=val(b);const n=x!==''&&y!==''&&Number.isFinite(Number(x))&&Number.isFinite(Number(y))?Number(x)-Number(y):String(x).localeCompare(String(y),undefined,{numeric:true});return descending?-n:n;});
-    rows.forEach(row=>table.tBodies[0].appendChild(row));
+    const collator=new Intl.Collator(undefined,{numeric:true});
+    const keyed=rows.map(row=>{const cell=row.cells[index];return {row,value:cell.dataset.order??cell.querySelector('[data-utc]')?.dataset.utc??cell.textContent.trim()};});
+    keyed.sort((a,b)=>{const x=a.value,y=b.value;const n=x!==''&&y!==''&&Number.isFinite(Number(x))&&Number.isFinite(Number(y))?Number(x)-Number(y):collator.compare(x,y);return descending?-n:n;});
+    const fragment=document.createDocumentFragment();
+    keyed.forEach(item=>fragment.appendChild(item.row));table.tBodies[0].appendChild(fragment);
   });
   const timeMode=root.querySelector('#da-time-mode');
   // Preferences only, scoped to this tab; never persist observations or filters.
   const preference=(key,value)=>{try {if(value===undefined)return sessionStorage.getItem('dnsalias.ui.'+key);sessionStorage.setItem('dnsalias.ui.'+key,value);}catch(_){}return null;};
   const savedTime=preference('time');if(['local','utc'].includes(savedTime))timeMode.value=savedTime;
-  const setTimes=()=>root.querySelectorAll('time[data-utc]').forEach(t=>{
+  let localTime;
+  const setTimes=(scope=root)=>scope.querySelectorAll('time[data-utc]').forEach(t=>{
     const d=new Date(Number(t.dataset.utc)*1000);
-    t.textContent=timeMode.value==='utc'?d.toISOString().replace('T',' ').slice(0,19)+' UTC':d.toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit'});
+    if(timeMode.value!=='utc'&&!localTime)localTime=new Intl.DateTimeFormat(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit'});
+    t.textContent=timeMode.value==='utc'?d.toISOString().replace('T',' ').slice(0,19)+' UTC':localTime.format(d);
     t.title=d.toISOString();
   });
   timeMode.addEventListener('change',()=>{preference('time',timeMode.value);setTimes();});setTimes();
@@ -118,7 +131,7 @@
 
   // Read-only client filters update only this panel. Native links remain the
   // fallback, including opening a new tab. Late responses cannot win a race.
-  let timelineRequest=null,timelineSequence=0;
+  let timelineRequest=null,timelineSequence=0,displayedTimeline=location.pathname+location.search;
   const timelineUrl=(href)=>{
     const u=new URL(href,location.href),panel=root.querySelector('#da-client');
     if(!panel||u.origin!==location.origin||u.pathname!==location.pathname||u.searchParams.get('view')!=='client'||u.searchParams.get('client')!==panel.dataset.client)return null;
@@ -133,7 +146,7 @@
     if(status)status.textContent='Loading activity…';
     const timeout=setTimeout(()=>abort.abort(),8000);
     try{
-      const response=await fetch(url,{credentials:'same-origin',cache:'no-store',signal:abort.signal});
+      const response=await fetch(url,{credentials:'same-origin',cache:'no-store',headers:{'X-DNSAlias-Fragment':'client'},signal:abort.signal});
       if(!response.ok||!(response.headers.get('Content-Type')||'').includes('text/html'))throw Error('Activity unavailable');
       const html=await response.text();if(html.length>8*1024*1024)throw Error('Activity response too large');
       const doc=new DOMParser().parseFromString(html,'text/html'),nextRoot=doc.querySelector('#da-console'),next=doc.querySelector('#da-client');
@@ -155,7 +168,8 @@
       root.querySelector('#da-refresh-now').href=url.href;
       const freshLabelForm=doc.querySelector('#da-domain-label-dialog form');
       if(labelDialog&&freshLabelForm)labelDialog.querySelector('form').setAttribute('action',freshLabelForm.getAttribute('action'));
-      setTimes();applySearch();
+      displayedTimeline=url.pathname+url.search;
+      setTimes(next);applySearch();
       // Empty/short results must still leave enough page height to retain the
       // clicked controls' position. The next panel replacement clears this.
       const missingHeight=scrollY+window.innerHeight-document.documentElement.scrollHeight;
@@ -179,8 +193,14 @@
     event.preventDefault();loadTimeline(link.href);
   });
   window.addEventListener('popstate',()=>{
-    if(timelineUrl(location.href))loadTimeline(location.href,false);
-    else location.reload();
+    const url=timelineUrl(location.href);
+    if(url){
+      if(timelineRequest||displayedTimeline!==url.pathname+url.search)loadTimeline(url.href,false);
+    }else{
+      const hash=location.hash.startsWith('#da-')?location.hash.slice(4):null;
+      const view=names.has(hash)?hash:new URL(location.href).searchParams.get('view')||'overview';
+      if(view!==root.dataset.view&&panels.some(p=>p.dataset.panel===view))show(view);
+    }
   });
   // One demand-triggered prefetch per page load. No periodic name polling.
   // All returned names are data: create text nodes, never insert HTML.
