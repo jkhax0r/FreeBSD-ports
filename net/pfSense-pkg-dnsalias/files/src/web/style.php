@@ -32,16 +32,18 @@
 @container (max-width:900px){
  #da-console .da-client-timeline{display:block;width:100%}
  #da-console .da-client-timeline thead{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
- #da-console .da-client-timeline tbody{display:grid;gap:12px}
- #da-console .da-client-timeline tr[data-row]{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"stamp result" "target target" "protocol rule" "evidence evidence" "actions actions";gap:10px 14px;border:1px solid var(--da-line);border-radius:8px;padding:14px;min-width:0}
+ #da-console .da-client-timeline tbody{display:block}
+ #da-console .da-client-timeline tr[data-row]{display:grid;contain:layout style;grid-template-columns:minmax(0,3fr) minmax(0,2fr);grid-template-areas:"stamp result" "target target" "protocol rule" "evidence evidence" "tags tags" "actions actions";gap:10px 14px;border:1px solid var(--da-line);border-radius:8px;padding:14px;min-width:0}
+ #da-console .da-client-timeline tr[data-row]:not(:last-child){margin-bottom:12px}
  #da-console .da-client-timeline tr[data-row] td{border:0!important;max-width:none;min-width:0;padding:0;overflow-wrap:anywhere}
  #da-console .da-client-timeline td:nth-child(1){grid-area:stamp}
  #da-console .da-client-timeline td:nth-child(2){grid-area:result;justify-self:end}
  #da-console .da-client-timeline td:nth-child(3){grid-area:target;font-size:14px;font-weight:600}
  #da-console .da-client-timeline td:nth-child(4){grid-area:protocol}
- #da-console .da-client-timeline td:nth-child(5){grid-area:rule;text-align:right}
+ #da-console .da-client-timeline td:nth-child(5){grid-area:rule;text-align:right;white-space:normal}
  #da-console .da-client-timeline td:nth-child(6){grid-area:evidence}
- #da-console .da-client-timeline td:nth-child(7){grid-area:actions;display:flex;flex-wrap:wrap;gap:8px;padding-top:10px;border-top:1px solid var(--da-line)!important}
+ #da-console .da-client-timeline td:nth-child(7){grid-area:tags}
+ #da-console .da-client-timeline td:nth-child(8){grid-area:actions;display:flex;flex-wrap:wrap;gap:8px;padding-top:10px;border-top:1px solid var(--da-line)!important}
  #da-console .da-client-timeline td:nth-child(3)::before,#da-console .da-client-timeline td:nth-child(4)::before,#da-console .da-client-timeline td:nth-child(5)::before{content:attr(data-label);display:block;font-size:10px;font-weight:400;color:var(--da-muted);margin-bottom:3px}
  #da-console .da-client-timeline .da-review{margin:0;min-height:32px}
  #da-console .da-client-timeline .da-empty{display:block}

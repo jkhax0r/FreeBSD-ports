@@ -91,8 +91,14 @@
   timeMode.addEventListener('change',()=>{preference('time',timeMode.value);setTimes();});setTimes();
   const dialog=root.querySelector('#da-event-dialog'), fields=root.querySelector('#da-event-fields');
   root.addEventListener('click',e=>{
-    const b=e.target.closest?.('[data-detail]');if(!b||!root.contains(b))return;
-    const data=JSON.parse(b.dataset.detail); fields.replaceChildren();
+    const b=e.target.closest?.('button[data-detail],button[data-detail-delta]');if(!b||!root.contains(b))return;
+    let data;
+    if (b.hasAttribute('data-detail-delta')) {
+      const base=b.closest('table')?.querySelector('button[data-detail-base]');
+      if(!base)return;
+      data={...JSON.parse(base.dataset.detail),...JSON.parse(b.dataset.detailDelta)};
+    } else data=JSON.parse(b.dataset.detail);
+    fields.replaceChildren();
     for (const [key,value] of Object.entries(data)) {const dt=document.createElement('dt'),dd=document.createElement('dd');dt.textContent=key;dd.textContent=String(value);fields.append(dt,dd);}
     dialog.showModal();
   });
@@ -100,8 +106,12 @@
   const policyDialog=root.querySelector('#da-policy-dialog'), policyFields=root.querySelector('#da-policy-fields');
   let draft=null;
   root.addEventListener('click',e=>{
-    const button=e.target.closest?.('[data-review]');if(!button||!root.contains(button))return;
-    const r=JSON.parse(button.dataset.review), domain=r.target_type==='domain';
+    const button=e.target.closest?.('button[data-review-intent],button[data-review]');if(!button||!root.contains(button))return;
+    const context=button.closest('[data-review-context]');
+    const r=JSON.parse(context?context.dataset.reviewContext:button.dataset.review);
+    if(context)r.intent=button.dataset.reviewIntent;
+    if(!['allow','block'].includes(r.intent))return;
+    const domain=r.target_type==='domain';
     const label=r.intent==='allow'?'Allow':'Block';
     draft={format:'dnsalias-policy-draft-1',state:'unapplied',created_utc:new Date().toISOString(),intent:r.intent,
       source:{kind:'exact_logged_address',address:r.client,identity_verified:false},
@@ -131,7 +141,7 @@
 
   // Read-only client filters update only this panel. Native links remain the
   // fallback, including opening a new tab. Late responses cannot win a race.
-  let timelineRequest=null,timelineSequence=0,displayedTimeline=location.pathname+location.search;
+  let timelineRequest=null,pendingTimeline=null,timelineSequence=0,displayedTimeline=location.pathname+location.search;
   const timelineUrl=(href)=>{
     const u=new URL(href,location.href),panel=root.querySelector('#da-client');
     if(!panel||u.origin!==location.origin||u.pathname!==location.pathname||u.searchParams.get('view')!=='client'||u.searchParams.get('client')!==panel.dataset.client)return null;
@@ -139,22 +149,27 @@
   };
   const loadTimeline=async(href,push=true)=>{
     const url=timelineUrl(href);if(!url)return false;
+    const target=url.pathname+url.search;
+    if(timelineRequest&&pendingTimeline===target)return true;
     const sequence=++timelineSequence;timelineRequest?.abort();
-    const abort=new AbortController();timelineRequest=abort;
-    const old=root.querySelector('#da-client'),scrollX=window.scrollX,scrollY=window.scrollY,oldFocus=document.activeElement;
+    const abort=new AbortController();timelineRequest=abort;pendingTimeline=target;
+    const old=root.querySelector('#da-client');
     const status=old.querySelector('.da-feed-status');old.setAttribute('aria-busy','true');
     if(status)status.textContent='Loading activity…';
     const timeout=setTimeout(()=>abort.abort(),8000);
     try{
-      const response=await fetch(url,{credentials:'same-origin',cache:'no-store',headers:{'X-DNSAlias-Fragment':'client'},signal:abort.signal});
+      const response=await fetch(url,{credentials:'same-origin',cache:'no-store',headers:{'X-DNSAlias-Fragment':'client-v2'},signal:abort.signal});
       if(!response.ok||!(response.headers.get('Content-Type')||'').includes('text/html'))throw Error('Activity unavailable');
       const html=await response.text();if(html.length>8*1024*1024)throw Error('Activity response too large');
       const doc=new DOMParser().parseFromString(html,'text/html'),nextRoot=doc.querySelector('#da-console'),next=doc.querySelector('#da-client');
       if(!nextRoot||nextRoot.dataset.view!=='client'||!next||next.dataset.client!==old.dataset.client||next.querySelector('script,iframe,object,embed')||nextRoot.querySelector('.da-danger'))throw Error('Activity unavailable or session expired');
       if(sequence!==timelineSequence)return true;
-      if(push)history.pushState({dnsAliasClientFeed:true},'',url);
+      // The user can scroll or move focus while the request is in flight.
+      const scrollX=window.scrollX,scrollY=window.scrollY,oldFocus=document.activeElement;
+      if(push&&target!==location.pathname+location.search)history.pushState({dnsAliasClientFeed:true},'',url);
+      setTimes(next);
+      next.classList.add('da-visible');
       const index=panels.indexOf(old);old.replaceWith(next);if(index>=0)panels[index]=next;
-      next.classList.add('da-visible');next.removeAttribute('aria-busy');
       for(const key of ['statusTime','statusAge','running'])root.dataset[key]=nextRoot.dataset[key];
       pageStarted=performance.now();statusAge=Number(root.dataset.statusAge);
       const freshBadge=nextRoot.querySelector('#da-health-badge');if(freshBadge)root.querySelector('#da-health-badge').replaceWith(freshBadge);
@@ -168,13 +183,15 @@
       root.querySelector('#da-refresh-now').href=url.href;
       const freshLabelForm=doc.querySelector('#da-domain-label-dialog form');
       if(labelDialog&&freshLabelForm)labelDialog.querySelector('form').setAttribute('action',freshLabelForm.getAttribute('action'));
-      displayedTimeline=url.pathname+url.search;
-      setTimes(next);applySearch();
+      displayedTimeline=target;
+      if(search?.value)applySearch();
       // Empty/short results must still leave enough page height to retain the
       // clicked controls' position. The next panel replacement clears this.
-      const missingHeight=scrollY+window.innerHeight-document.documentElement.scrollHeight;
-      if(missingHeight>0)next.style.minHeight=(next.getBoundingClientRect().height+missingHeight)+'px';
-      window.scrollTo(scrollX,scrollY);
+      if(scrollY>0 || scrollX>0){
+        const missingHeight=scrollY+window.innerHeight-document.documentElement.scrollHeight;
+        if(missingHeight>0)next.style.minHeight=(next.getBoundingClientRect().height+missingHeight)+'px';
+        window.scrollTo(scrollX,scrollY);
+      }
       if(old.contains(oldFocus)&&document.activeElement===document.body){
         const active=next.querySelector('.da-feed-filters [aria-current]');active?.focus({preventScroll:true});
       }
@@ -182,7 +199,7 @@
       if(sequence===timelineSequence&&status)status.textContent='Could not update activity. The previous results are still shown; use Refresh now or open the link normally.';
     }finally{
       clearTimeout(timeout);
-      if(sequence===timelineSequence){root.querySelector('#da-client')?.removeAttribute('aria-busy');timelineRequest=null;}
+      if(sequence===timelineSequence){root.querySelector('#da-client')?.removeAttribute('aria-busy');timelineRequest=null;pendingTimeline=null;}
     }
     return true;
   };
@@ -190,7 +207,14 @@
     if(event.defaultPrevented||event.button!==0||event.ctrlKey||event.metaKey||event.shiftKey||event.altKey)return;
     const link=event.target.closest?.('#da-client .da-feed-filters a, #da-client .da-client-cards a, #da-client .da-pagination a');
     if(!link||!timelineUrl(link.href))return;
-    event.preventDefault();loadTimeline(link.href);
+    event.preventDefault();
+    // Re-selecting a freshly displayed filter should not enqueue another
+    // query. Links from older cursors still select the latest activity.
+    if(!timelineRequest&&link.matches('.da-feed-filters a[aria-current]')&&performance.now()-pageStarted<30000){
+      const shown=new URL(displayedTimeline,location.href);
+      if(!shown.searchParams.has('before')&&!shown.searchParams.has('asof')&&!root.querySelector('.da-feed-status')?.textContent)return;
+    }
+    loadTimeline(link.href);
   });
   window.addEventListener('popstate',()=>{
     const url=timelineUrl(location.href);

@@ -15,11 +15,14 @@ function da_url($v, $changes=[]) {
     return '?'.http_build_query(array_filter($q,fn($value)=>$value!==''), '', '&', PHP_QUERY_RFC3986);
 }
 function da_link($v,$text,$changes) {
+    $client_label=isset($changes['client']) && $changes['client']!=='' && $text===$changes['client'];
     if (isset($changes['client']) && !isset($changes['action'])) { $changes=array_merge(['domain'=>'','tracker'=>'','destination'=>'','action'=>'','feed'=>'all','before'=>'','asof'=>''],$changes,['view'=>'client']); }
     elseif (!empty($changes['domain'])) { $changes=array_merge($changes,['view'=>'domain','client'=>$v['client']??'','tracker'=>'','destination'=>'','action'=>'','before'=>'','asof'=>'']); }
     elseif (!empty($changes['destination'])) { $changes=array_merge($changes,['view'=>'ip','client'=>'','tracker'=>'','domain'=>'','action'=>'','before'=>'','asof'=>'']); }
-    if (isset($changes['client']) && $text===$changes['client']) { $text=da_client_label($v,$text); }
-    return ['text'=>$text,'url'=>da_url($v,$changes)]+(isset($changes['client'])?['client_ip'=>$changes['client']]:[]);
+    if ($client_label) {
+        return ['text'=>da_client_label($v,$text),'url'=>da_url($v,$changes),'client_ip'=>$text];
+    }
+    return ['text'=>$text,'url'=>da_url($v,$changes)];
 }
 function da_time($stamp) { return ['text'=>da_when($stamp),'time'=>$stamp]; }
 function da_context_client($v) {
@@ -34,7 +37,22 @@ function da_bytes($n) {
     $i=0; while ($n>=1024 && $i<4) { $n/=1024; $i++; }
     return number_format($n,$i?1:0).' '.['B','KiB','MiB','GiB','TiB'][$i];
 }
-function da_table($headers,$rows,$class='') {
+function da_event_detail_attr(array $detail,bool $compact,?array &$first): string {
+    if (!$compact) return 'data-detail='.da_json_attr($detail);
+    if ($first===null) {
+        $first=$detail;
+        return 'data-detail-base data-detail='.da_json_attr($detail);
+    }
+    // Only reuse an identical ordered field list. Mixed event types may carry
+    // extra answer records or different attribution and retain their full data.
+    if (array_keys($detail)===array_keys($first)) {
+        $changes=array_filter($detail,static fn($value,$key)=>$value!==$first[$key],ARRAY_FILTER_USE_BOTH);
+        if (count($changes)*2<count($detail)) return 'data-detail-delta='.da_json_attr($changes);
+    }
+    return 'data-detail='.da_json_attr($detail);
+}
+function da_table($headers,$rows,$class='',$compact_events=false) {
+    $first_detail=null;
     echo '<div class="da-table-wrap"><table class="da-table '.da_h($class).'"><thead><tr>';
     foreach ($headers as $header) { echo '<th scope="col" aria-sort="none"><button type="button" class="da-sort">'.da_h($header).'<span aria-hidden="true"> ↕</span></button></th>'; }
     echo '</tr></thead><tbody>';
@@ -42,13 +60,23 @@ function da_table($headers,$rows,$class='') {
         echo '<tr data-row>';
         foreach ($row as $index=>$cell) {
             $c=is_array($cell)?$cell:['text'=>$cell];
-            echo '<td data-label="'.da_h($headers[$index]??'').'"'.(isset($c['order'])?' data-order="'.da_h($c['order']).'"':'').'>';
+            echo '<td';
+            // The timeline uses named cells when it becomes a stack of cards.
+            if ($class==='da-client-timeline') echo ' data-label="'.da_h($headers[$index]??'').'"';
+            if (isset($c['order'])) echo ' data-order="'.da_h($c['order']).'"';
+            if ($compact_events && isset($c['review'])) echo ' data-review-context='.da_json_attr($c['review']);
+            echo '>';
             if (isset($c['destination_context'])) { da_destination_render($c); }
             elseif (isset($c['domain_label'])) { da_labels_cell_render($c); }
             elseif (isset($c['url'])) { echo '<a href="'.da_h($c['url']).'"'.(isset($c['client_ip'])?' data-client-ip="'.da_h($c['client_ip']).'"':'').'>'.da_h($c['text']).'</a>'; }
             elseif (isset($c['badge'])) { echo '<span class="da-pill da-'.(in_array($c['badge'],['pass','block'],true)?$c['badge']:'neutral').'">'.da_h($c['text']).'</span>'; }
-            elseif (isset($c['detail'])) { echo '<button type="button" class="da-detail" data-detail=' . da_json_attr($c['detail']) . '>'.da_h($c['label']??'Details').' <span aria-hidden="true">↗</span></button>'; }
-            elseif (isset($c['review'])) { foreach (['allow'=>'Review allow','block'=>'Review block'] as $intent=>$label) { echo '<button type="button" class="da-review" data-review=' . da_json_attr($c['review']+['intent'=>$intent]) . '>'.da_h($label).'</button> '; } }
+            elseif (isset($c['detail'])) { echo '<button type="button" class="da-detail" ' . da_event_detail_attr($c['detail'],$compact_events,$first_detail) . '>'.da_h($c['label']??'Details').' <span aria-hidden="true">↗</span></button>'; }
+            elseif (isset($c['review'])) {
+                foreach (['allow'=>'Review allow','block'=>'Review block'] as $intent=>$label) {
+                    $attribute=$compact_events?'data-review-intent="'.da_h($intent).'"':'data-review='.da_json_attr($c['review']+['intent'=>$intent]);
+                    echo '<button type="button" class="da-review" '.$attribute.'>'.da_h($label).'</button> ';
+                }
+            }
             elseif (isset($c['hint'])) { echo '<span tabindex="0" title="'.da_h($c['hint']).'">'.da_h($c['text']).'</span>'; }
             elseif (isset($c['time']) && is_numeric($c['time'])) { echo '<time datetime="'.gmdate('c',(int)$c['time']).'" data-utc="'.da_h($c['time']).'">'.da_h($c['text']).'</time>'; }
             else { echo da_h($c['text']??''); }
@@ -102,6 +130,18 @@ function da_retention($status) {
     }
     echo '<p class="da-footnote">All collected sources are included; page filters do not narrow these counts. Every record still expires after 24 hours. Each log type can cover a different time range; the oldest record does not prove continuous coverage. Missing records are unknown, not zero traffic. Previously removed records are not recovered.</p></div>';
 }
+function da_console_open($v,$fresh) {
+    $s=$v['status'];
+    ?><section id="da-console" data-identity-pending="<?=!empty($v['identity_pending'])?'1':'0'?>" data-identity-observed="<?=da_h($s['client_identity']['observed_utc']??0)?>" data-view="<?=da_h($v['view'])?>" data-status-time="<?=da_h($s['updated_utc']??0)?>" data-status-age="<?=da_h($v['status_age']??30)?>" data-running="<?=$fresh?'1':'0'?>"><?php
+}
+function da_health_badge($v,$fresh) {
+    ?><a href="<?=da_h(da_url($v,['view'=>'coverage','before'=>'','asof'=>'']))?>" data-nav="coverage" class="da-pill <?=$fresh?'da-live':'da-warn'?>" id="da-health-badge"><span aria-hidden="true">●</span> <?=$fresh?'Collector live':'Collector stale / unavailable'?></a><?php
+}
+function da_render_errors($v) {
+    $s=$v['status'];
+    ?><?php foreach ($v['errors'] as $error): ?><div class="da-notice da-danger"><?=da_h($error)?></div><?php endforeach; ?>
+      <?php if (!empty($s['error'])): ?><div class="da-notice da-danger">Collector: <?=da_h($s['error'])?></div><?php endif; ?><?php
+}
 function da_render($v, $fragment=false) {
     if(function_exists('da_policy_history_read')){
         try{$v['policy_history']=da_policy_history_read($v['data_directory']??'/var/db/dnsalias',$v['now']);}
@@ -112,14 +152,25 @@ function da_render($v, $fragment=false) {
     $namedPolicy=!empty($v['trial']['policy_name']);
     $s=$v['status'];$fresh=$v['fresh'] && ($s['state']??'')==='running';
     $reply_health=$v['reply_health']??da_reply_health([],(float)$v['now'],'missing');
+    if ($fragment && $v['view']==='client') {
+        // Return everything the current filter and Back handlers consume.
+        da_console_open($v,$fresh);
+        da_health_badge($v,$fresh);
+        da_render_errors($v);
+        da_reply_health_warning($reply_health);
+        da_labels_context_render($v);
+        da_client_render($v,$fragment==='client-v2');
+        da_labels_dialog_render($v);
+        echo '</section>';
+        return;
+    }
     $views=['overview'=>'Overview','clients'=>'Clients','client'=>'Client inspect','domains'=>'Domains','domain'=>'Domain inspect','ip'=>'IP inspect','activity'=>'Activity','blocks'=>'Blocked','rules'=>'Rules','aliases'=>'Aliases','coverage'=>'Coverage'];
     $window=[15=>'Last 15 minutes',60=>'Last hour',1440=>'Last 24 hours'][$v['window']];
     if(!$fragment)require __DIR__.'/style.php';
     ?>
-    <section id="da-console" data-identity-pending="<?=!empty($v['identity_pending'])?'1':'0'?>" data-identity-observed="<?=da_h($s['client_identity']['observed_utc']??0)?>" data-view="<?=da_h($v['view'])?>" data-status-time="<?=da_h($s['updated_utc']??0)?>" data-status-age="<?=da_h($v['status_age']??30)?>" data-running="<?=$fresh?'1':'0'?>">
-      <header class="da-header"><div><div class="da-eyebrow">NETWORK VISIBILITY</div><h1>DNS Alias <span>Activity console</span></h1></div><div class="da-status"><a href="<?=da_h(da_url($v,['view'=>'coverage','before'=>'','asof'=>'']))?>" data-nav="coverage" class="da-pill <?=$fresh?'da-live':'da-warn'?>" id="da-health-badge"><span aria-hidden="true">●</span> <?=$fresh?'Collector live':'Collector stale / unavailable'?></a><a href="<?=da_h(da_url($v,['view'=>'aliases','before'=>'','asof'=>'']))?>" data-nav="aliases" class="da-pill da-neutral"><?=function_exists('da_saved_aliases_render')?'DNS aliases':($namedPolicy?'Alias block policy':($observationSession?'DNS reply session':($trialPresent?'Short block trial':'Observation only')))?></a></div></header>
-      <?php foreach ($v['errors'] as $error): ?><div class="da-notice da-danger"><?=da_h($error)?></div><?php endforeach; ?>
-      <?php if (!empty($s['error'])): ?><div class="da-notice da-danger">Collector: <?=da_h($s['error'])?></div><?php endif; ?>
+    <?php da_console_open($v,$fresh); ?>
+      <header class="da-header"><div><div class="da-eyebrow">NETWORK VISIBILITY</div><h1>DNS Alias <span>Activity console</span></h1></div><div class="da-status"><?php da_health_badge($v,$fresh); ?><a href="<?=da_h(da_url($v,['view'=>'aliases','before'=>'','asof'=>'']))?>" data-nav="aliases" class="da-pill da-neutral"><?=function_exists('da_saved_aliases_render')?'DNS aliases':($namedPolicy?'Alias block policy':($observationSession?'DNS reply session':($trialPresent?'Short block trial':'Observation only')))?></a></div></header>
+      <?php da_render_errors($v); ?>
       <?php if ($v['view']==='aliases' && !function_exists('da_saved_aliases_render') && function_exists('da_trial_render')) {da_trial_render($v['trial']??null,$v['can_control']??false,$v['trial_error']??'');} ?>
       <?php if ($v['view']==='aliases' && !function_exists('da_saved_aliases_render') && function_exists('da_preparation_render')) {da_preparation_render($v['preparation']??null,$v['can_control']??false,in_array($v['trial']['state']??'',['prepared','queued','running','cancelling'],true),$v['policy_prefill']??null);} ?>
       <div class="da-shell"><nav class="da-nav" aria-label="DNS Alias views">
