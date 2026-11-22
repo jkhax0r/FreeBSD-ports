@@ -45,18 +45,22 @@ function da_client_load($db, &$v, $query) {
     elseif (in_array($v['feed'],['pass','block'],true)) { $visible.=" AND kind='firewall_packet' AND action=:feed";$params[':feed']=$v['feed']; }
     if (isset($query['before'])) {
         if (!is_string($query['before']) || !preg_match('/^([0-9]{1,10}(?:\.[0-9]{1,17})?):([1-9][0-9]{0,17})$/D',$query['before'],$m) || (float)$m[1]>$v['asof']) { throw new InvalidArgumentException('Refresh this client view; its event cursor is invalid.'); }
+        $v['client_page_before']=$query['before'];
         $visible.=' AND (time,id)<(:before_time,:before_id)';
         $params[':before_time']=$m[1];$params[':before_id']=(int)$m[2];
         $logWhere.=' AND (time,id)<(:before_time,:before_id)';$logParams[':before_time']=$m[1];$logParams[':before_id']=(int)$m[2];
     }
-    $rows=da_rows($db,'SELECT id,time,kind,client,domain,tracker,action,body FROM events WHERE '.$base.' AND '.$visible.' ORDER BY time DESC,id DESC LIMIT 101',$params);
+    $page_size=(int)(($v['rows']??'')?:100);
+    $params[':row_cap']=$page_size+1;
+    $rows=da_rows($db,'SELECT id,time,kind,client,domain,tracker,action,body FROM events WHERE '.$base.' AND '.$visible.' ORDER BY time DESC,id DESC LIMIT :row_cap',$params);
     // Merge two independently indexed, bounded streams. Keeping the existing
     // web/query index avoids decoding all client packets to count DNS outcomes.
     if(in_array($v['feed'],['all','dns','dns_reply','dns_block'],true)) {
-        $logs=da_rows($db,'SELECT id,time,kind,client,domain,tracker,action,body FROM events WHERE '.$logWhere.' ORDER BY time DESC,id DESC LIMIT 101',$logParams);
-        $rows=array_merge($rows,$logs);usort($rows,fn($a,$b)=>($b['time']<=>$a['time'])?:($b['id']<=>$a['id']));$rows=array_slice($rows,0,101);
+        $logParams[':row_cap']=$params[':row_cap'];
+        $logs=da_rows($db,'SELECT id,time,kind,client,domain,tracker,action,body FROM events WHERE '.$logWhere.' ORDER BY time DESC,id DESC LIMIT :row_cap',$logParams);
+        $rows=array_merge($rows,$logs);usort($rows,fn($a,$b)=>($b['time']<=>$a['time'])?:($b['id']<=>$a['id']));$rows=array_slice($rows,0,$page_size+1);
     }
-    if (count($rows)>100) {
+    if (count($rows)>$page_size) {
         array_pop($rows);$last=$rows[count($rows)-1];
         $v['next_cursor']=sprintf('%.17g',$last['time']).':'.$last['id'];
     }
@@ -87,14 +91,22 @@ function da_policy_review($client,$kind,$target,$tracker='',$port=null,$protocol
     return ['review'=>['client'=>$client,'target_type'=>$kind,'target'=>$target,'tracker'=>$tracker,'port'=>$port,'protocol'=>$protocol]];
 }
 function da_client_render($v,$compact_events=true) {
+    $page_size=(int)(($v['rows']??'')?:100);
     ?>
-    <section class="da-view da-visible" id="da-client" data-client="<?=da_h($v['client'])?>" data-panel="client" aria-label="Client inspect">
+    <section class="da-view da-visible" id="da-client" data-client="<?=da_h($v['client'])?>" data-feed="<?=da_h($v['feed']??'all')?>" data-rows="<?=da_h($v['rows']??'')?>" data-panel="client" aria-label="Client inspect">
       <div class="da-panel"><div class="da-panel-title"><div><div class="da-eyebrow">CLIENT INSPECT</div><h2 data-client-ip="<?=da_h($v['client'])?>"><?=da_h($v['client']?da_client_label($v,$v['client']):'Choose a client')?></h2><p>Recent DNS evidence and logged web traffic in one timeline</p></div><a href="<?=da_h(da_url($v,['client'=>'','view'=>'clients','before'=>'','asof'=>'','domain'=>'','tracker'=>'','destination'=>'','action'=>'']))?>">Choose another client ↗</a></div>
       <?php if ($v['client']===''): ?><p>Select a client from Clients or enter its IP above.</p><?php else: ?>
       <div id="da-client-identity" data-client="<?=da_h($v['client'])?>"><?php da_client_identity_render($v,$v['client']); ?></div>
       <div class="da-cards da-client-cards"><?php foreach (['dns'=>'DNS queries','pass'=>'Passed packets','block'=>'Blocked packets'] as $key=>$label): ?><a class="da-card da-card-<?=$key?>" href="<?=da_h(da_url($v,['view'=>'client','feed'=>$key,'before'=>'','asof'=>'']))?>"><span><?=$label?></span><strong><?=da_h($v['errors']?'—':da_number($v['counts'][$key]??0))?></strong><small>Selected client and time window</small></a><?php endforeach; ?></div>
       <p class="da-footnote">Recorded DNS outcomes: <?=da_h(da_number($v['dns_outcomes']['resolver_replies']??0))?> resolver replies (<?=da_h(da_number($v['dns_outcomes']['resolver_sinkholes']??0))?> with sinkholes) · <?=da_h(da_number($v['dns_outcomes']['replies']??0))?> reply logs · <?=da_h(da_number($v['dns_outcomes']['sinkholes']??0))?> logged sinkholes · <?=da_h(da_number($v['dns_outcomes']['dnsbl']??0))?> DNSBL blocks. Sources may observe the same reply; these counts are separate and do not increase query or firewall packet counts.</p>
-      <div class="da-feed-filters" aria-label="Client timeline decision"><?php foreach (['all'=>'All activity','block'=>'Firewall blocked','pass'=>'Firewall passed','dns'=>'DNS evidence','dns_reply'=>'Answers / DNSBL','dns_block'=>'DNS blocked / sinkhole'] as $key=>$label): ?><a class="da-feed-link" <?=($v['feed']??'all')===$key?'aria-current="true"':''?> href="<?=da_h(da_url($v,['view'=>'client','feed'=>$key,'before'=>'','asof'=>'']))?>"><?=$label?></a><?php endforeach; ?><span class="da-muted">Newest first · up to 100 records</span></div><p class="da-feed-status" role="status" aria-live="polite"></p>
+      <div class="da-feed-filters" aria-label="Client timeline decision"><?php foreach (['all'=>'All activity','block'=>'Firewall blocked','pass'=>'Firewall passed','dns'=>'DNS evidence','dns_reply'=>'Answers / DNSBL','dns_block'=>'DNS blocked / sinkhole'] as $key=>$label): ?><a class="da-feed-link" <?=($v['feed']??'all')===$key?'aria-current="true"':''?> href="<?=da_h(da_url($v,['view'=>'client','feed'=>$key,'before'=>'','asof'=>'']))?>"><?=$label?></a><?php endforeach; ?></div>
+      <div class="da-feed-filters da-page-sizes" role="group" aria-label="Events per page"><span class="da-muted">Newest first · Events per page</span>
+        <?php foreach ([25,50,100] as $size):
+            $cursor=$v['client_page_before']??'';
+            $url=da_url($v,['rows'=>(string)$size,'before'=>$cursor,'asof'=>$cursor!==''?(string)$v['asof']:'']); ?>
+            <a href="<?=da_h($url)?>" class="da-feed-link" aria-label="<?=da_h($size)?> events per page" <?=$size===$page_size?'aria-current="true"':''?>><?=$size?></a>
+        <?php endforeach; ?>
+      </div><p class="da-feed-status" role="status" aria-live="polite"></p>
       <p class="da-footnote">DNS queries are shown separately from firewall decisions. Click a name for DNS evidence while retaining the selected client. Clear the client filter to inspect all clients. Resolver replies do not prove delivery or firewall permission; an IP block is never assigned to a nearby query just because their times match. Add to DNS alias opens the shared alias editor with this exact name. Existing ordinary firewall rules decide which sources pass or block; adding a name does not create a rule. IP-only actions remain unapplied drafts.</p>
       </div><div class="da-panel"><?php
       $rows=[];

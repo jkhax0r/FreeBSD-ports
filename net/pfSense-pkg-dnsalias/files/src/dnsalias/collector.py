@@ -16,12 +16,8 @@ import signal
 import sqlite3
 import subprocess
 import time
-import uuid
 from . import __version__
-from .telemetry import TailReader, parse_dns, parse_filter, parse_rules, CounterTracker
 from .rollups import HourlyCounts
-from .policylog import parse_policy_log
-from .clientidentity import collect_identity,consume_identity_request
 
 MAX_DB_BYTES = 64 * 1024 * 1024
 MAX_EVENTS = 20000
@@ -223,6 +219,7 @@ def prepare_trial_request(data_dir,now):
 
 
 def collect_rules(tracker):
+    from .telemetry import parse_rules
     # No user-controlled command, shell, table operation, reload or state removal.
     result=subprocess.run(["/sbin/pfctl","-vvsr"],stdout=subprocess.PIPE,stderr=subprocess.PIPE,
                           text=True,timeout=3,check=False)
@@ -243,6 +240,10 @@ def resource_limits():
 
 
 def run(data_dir, duration, resolver_log="/var/log/resolver.log", filter_log="/var/log/filter.log", rules_enabled=True):
+    import uuid
+    from .telemetry import TailReader, parse_dns, parse_filter, CounterTracker
+    from .policylog import parse_policy_log
+    from .clientidentity import collect_identity,consume_identity_request
     data_dir=Path(data_dir)
     if not data_dir.is_dir() or data_dir.is_symlink():
         raise ValueError("pre-created owned data directory required")

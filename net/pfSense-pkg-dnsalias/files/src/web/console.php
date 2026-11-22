@@ -10,7 +10,7 @@ function da_recorded_rule_label($v,$tracker,$stamp) {
 }
 function da_url($v, $changes=[]) {
     $q=[];
-    foreach (['window','client','domain','tracker','destination','action','view','feed','before','asof','review','tag','hide_tag'] as $k) { $q[$k]=$v[$k]??''; }
+    foreach (['window','client','domain','tracker','destination','action','view','feed','before','asof','review','tag','hide_tag','rows'] as $k) { $q[$k]=$v[$k]??''; }
     foreach ($changes as $k=>$value) { if (array_key_exists($k,$q)) { $q[$k]=$value; } }
     return '?'.http_build_query(array_filter($q,fn($value)=>$value!==''), '', '&', PHP_QUERY_RFC3986);
 }
@@ -180,6 +180,8 @@ function da_render($v, $fragment=false) {
       </nav><main class="da-main">
         <form class="da-filters" method="get" action="dnsalias_status.php">
           <input type="hidden" name="view" value="<?=da_h($v['view'])?>">
+          <input type="hidden" name="rows" value="<?=da_h($v['rows']??'')?>" <?=empty($v['rows'])?'disabled':''?>>
+          <?php if($v['view']==='client'): ?><input type="hidden" name="feed" value="<?=da_h($v['feed']??'all')?>"><?php endif; ?>
           <label>Event window<select name="window"><?php foreach ([15=>'15 minutes',60=>'1 hour',1440=>'24 hours'] as $n=>$label): ?><option value="<?=$n?>" <?=$v['window']===$n?'selected':''?>><?=$label?></option><?php endforeach; ?></select></label>
           <label>Client / source IP<input name="client" value="<?=da_h($v['client'])?>" placeholder="All observed clients" maxlength="45"></label>
           <label><?= $v['view']==='domain'?'Exact DNS name':'DNS name contains' ?><input name="domain" value="<?=da_h($v['domain'])?>" placeholder="Search DNS names" maxlength="253"></label>

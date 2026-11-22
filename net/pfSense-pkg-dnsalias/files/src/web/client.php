@@ -183,6 +183,10 @@
       root.querySelector('#da-refresh-now').href=url.href;
       const freshLabelForm=doc.querySelector('#da-domain-label-dialog form');
       if(labelDialog&&freshLabelForm)labelDialog.querySelector('form').setAttribute('action',freshLabelForm.getAttribute('action'));
+      const filters=root.querySelector('.da-filters');
+      const rowsInput=filters.elements.namedItem('rows'),feedInput=filters.elements.namedItem('feed');
+      if(rowsInput){rowsInput.value=next.dataset.rows||'';rowsInput.disabled=!rowsInput.value;}
+      if(feedInput)feedInput.value=next.dataset.feed||url.searchParams.get('feed')||'all';
       displayedTimeline=target;
       if(search?.value)applySearch();
       // Empty/short results must still leave enough page height to retain the
@@ -193,7 +197,8 @@
         window.scrollTo(scrollX,scrollY);
       }
       if(old.contains(oldFocus)&&document.activeElement===document.body){
-        const active=next.querySelector('.da-feed-filters [aria-current]');active?.focus({preventScroll:true});
+        const area=oldFocus.closest('.da-page-sizes')?'.da-page-sizes':'.da-feed-filters';
+        next.querySelector(area+' [aria-current]')?.focus({preventScroll:true});
       }
     }catch(error){
       if(sequence===timelineSequence&&status)status.textContent='Could not update activity. The previous results are still shown; use Refresh now or open the link normally.';
@@ -208,6 +213,7 @@
     const link=event.target.closest?.('#da-client .da-feed-filters a, #da-client .da-client-cards a, #da-client .da-pagination a');
     if(!link||!timelineUrl(link.href))return;
     event.preventDefault();
+    if(!timelineRequest&&link.matches('.da-page-sizes a[aria-current]'))return;
     // Re-selecting a freshly displayed filter should not enqueue another
     // query. Links from older cursors still select the latest activity.
     if(!timelineRequest&&link.matches('.da-feed-filters a[aria-current]')&&performance.now()-pageStarted<30000){

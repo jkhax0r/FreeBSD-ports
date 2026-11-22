@@ -59,6 +59,8 @@ function da_load($directory, $query, $now) {
     try{$v=array_replace($v,da_labels_query($query));}catch(InvalidArgumentException $e){$v['errors'][]=$e->getMessage();}
     $window = is_string($query['window'] ?? null) ? $query['window'] : '60';
     $v['window'] = in_array($window, ['15','60','1440'], true) ? (int)$window : 60;
+    // An omitted choice keeps existing Client inspect links at 100 events.
+    $v['rows'] = in_array($query['rows'] ?? null, ['25','50','100'], true) ? $query['rows'] : '';
     $v['client'] = is_string($query['client'] ?? null) ? trim($query['client']) : '';
     $v['domain'] = is_string($query['domain'] ?? null) ? strtolower(trim($query['domain'])) : '';
     $v['tracker'] = is_string($query['tracker'] ?? null) ? trim($query['tracker']) : '';

@@ -218,6 +218,7 @@ function da_labels_return_url(array $query): string {
     $out=[];
     foreach(['window','client','domain','tracker','destination','action','view','feed','review','tag','hide_tag'] as $key)
         if(isset($query[$key])&&is_string($query[$key])&&strlen($query[$key])<=253&&$query[$key]!=='')$out[$key]=$query[$key];
+    if(in_array($query['rows']??null,['25','50','100'],true))$out['rows']=$query['rows'];
     return 'dnsalias_status.php'.($out?'?'.http_build_query($out,'','&',PHP_QUERY_RFC3986):'');
 }
 function da_labels_post(array $post,bool $allowed,string $data): array {
