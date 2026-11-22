@@ -237,7 +237,7 @@ function da_labels_cell(array $v,string $domain): array {
 function da_labels_cell_render(array $cell): void {
     $label=$cell['domain_label'];$text=$label['review']===''?'Unreviewed':ucfirst($label['review']);$tags=implode(', ',$label['tags']);
     if($tags!=='')$text.=' · '.(strlen($tags)>45?substr($tags,0,42).'…':$tags);
-    if(!empty($cell['editable']))echo '<button type="button" class="da-detail da-domain-label" data-domain-label="'.da_h(json_encode($label,JSON_INVALID_UTF8_SUBSTITUTE)).'" title="'.da_h('Edit review / tags for '.$label['domain'].($tags!==''?' · '.$tags:'')).'">'.da_h($text).'</button>';
+    if(!empty($cell['editable']))echo '<button type="button" class="da-detail da-domain-label" data-domain-label=' . da_json_attr($label) . ' title="'.da_h('Edit review / tags for '.$label['domain'].($tags!==''?' · '.$tags:'')).'">'.da_h($text).'</button>';
     else echo '<span title="'.da_h($tags).'">'.da_h($text).'</span>';
 }
 function da_labels_filters_render(array $v): void {

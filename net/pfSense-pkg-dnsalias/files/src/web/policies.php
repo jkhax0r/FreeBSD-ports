@@ -115,18 +115,39 @@ function da_alias_delete(string $name): void {
     // Recheck complete live references and native membership inside the final transaction.
     da_alias_delete_command('remove',$name);
 }
-function da_alias_service(string $op): array {
-    if(!in_array($op,['start','stop','status','boot_enable','boot_disable','service_start','service_stop'],true))throw new RuntimeException('Invalid service action');
+function da_alias_display_status(array $policies,?string $selected=null): array {
+    // Use the authenticated request's native config and verify the namespace
+    // before selecting any table. Service controls use their own config read.
+    try{dnsalias_policies_check($policies);}
+    catch(Throwable $error){return da_alias_service('status');}
+    if($selected!==null){
+        $policies=array_values(array_filter($policies,static fn($p)=>$p['name']===$selected));
+        if(!$policies)return [];
+    }
+    $snapshot=json_encode(['format'=>'dnsalias-saved-aliases-1','policies'=>$policies],JSON_THROW_ON_ERROR);
+    return da_alias_service('display_status',$snapshot);
+}
+function da_alias_service(string $op,?string $display_snapshot=null): array {
+    if(!in_array($op,['start','stop','status','display_status','boot_enable','boot_disable','service_start','service_stop'],true))throw new RuntimeException('Invalid service action');
+    if(($op==='display_status')!==($display_snapshot!==null)||($display_snapshot!==null&&strlen($display_snapshot)>262144+128))
+        throw new RuntimeException('Invalid alias display snapshot');
     $boot=str_starts_with($op,'boot_');
     $native=str_starts_with($op,'service_');
     $p=proc_open(['/usr/local/bin/python3.11','-B','/usr/local/libexec/dnsalias/dnsalias/lifecycle.py',($boot||$native)?'service':'alias',($boot?substr($op,5):($native?substr($op,8):$op))],
         [0=>['pipe','r'],1=>['pipe','w'],2=>['pipe','w']],$pipes,'/usr/local/libexec/dnsalias');
     if(!is_resource($p))throw new RuntimeException('Service control unavailable');
     // Status includes applied names, PF members and service health.
-    $limit=$op==='status'?1048576:262144;
+    $limit=($op==='status'||$op==='display_status')?1048576:262144;
+    $length=$display_snapshot===null?0:strlen($display_snapshot);
+    $written=0;
+    while($written<$length){
+        $n=fwrite($pipes[0],substr($display_snapshot,$written,65536));
+        if($n===false||$n===0)break;
+        $written+=$n;
+    }
     fclose($pipes[0]);$out=stream_get_contents($pipes[1],$limit+1);$err=stream_get_contents($pipes[2],4097);
     fclose($pipes[1]);fclose($pipes[2]);$code=proc_close($p);
-    if($code!==0||strlen($out)>$limit)throw new RuntimeException('Alias service: '.substr($err,0,200));
+    if($written!==$length||$code!==0||strlen($out)>$limit)throw new RuntimeException('Alias service: '.substr($err,0,200));
     return json_decode($out,true,32,JSON_THROW_ON_ERROR);
 }
 function da_alias_rule_index(array $rules): array {
@@ -174,13 +195,11 @@ function da_alias_rule_references(array $policies,array $index,$observed): void 
     echo '<p class="da-footnote">Up to50 entries shown. Only tracked main-ruleset entries with counters are included. These rules reference the table; their counters are for the entire rule, including any negated or broader matching scope. They are not exact alias hits, unique connections or HTTP requests. TCP/UDP entries may share a tracker. Client/domain filters do not narrow these counters. Anchors are not included; no references shown is not proof that the alias is unused.</p></div>';
 }
 function da_saved_aliases_render(array $policies,array $service,bool $can,string $error='',array $rule_snapshot=[],$rules_observed=null,?array $member_view=null,int $window=60): void {
-    $rule_index=da_alias_rule_index($rule_snapshot);
-    $reference_snapshot=da_alias_rule_snapshot($rules_observed);
-    if(isset($_GET['inspect_members'])){da_alias_members_render($member_view,$can);return;}
+    if(isset($_GET['inspect_members'])){da_alias_members_render($member_view,$can,($_GET['show_names']??'')==='1');return;}
     if(isset($_GET['inspect_alias'])){
         echo '<p class="da-alias-back"><a href="dnsalias_status.php?view=aliases">← Back to DNS aliases</a></p>';
         $found=false;foreach($policies as $p)if($p['name']===($_GET['inspect_alias']??null))$found=true;
-        if($found)da_alias_rule_references($policies,$rule_index,$rules_observed);
+        if($found)da_alias_rule_references($policies,da_alias_rule_index($rule_snapshot),$rules_observed);
         else echo '<div class="da-panel"><h2>DNS alias not found</h2></div>';
         return;
     }
@@ -191,6 +210,8 @@ function da_saved_aliases_render(array $policies,array $service,bool $can,string
         echo '<p class="da-footnote">Use Status → Services for start, stop and restart. Alias names and patterns are managed separately.</p>';
         echo '<details class="da-domain-aliases"><summary>Preferences backup</summary><p>Download saved alias names and all domain reviews/tags. Firewall rules are included in pfSense’s configuration backup. Logs and learned IPs are excluded.</p><p><a href="dnsalias_status.php?preferences_export=1">Download preferences backup</a></p></details></div>';return;
     }
+    $rule_index=da_alias_rule_index($rule_snapshot);
+    $reference_snapshot=da_alias_rule_snapshot($rules_observed);
     $health=da_alias_health($service);
     echo '<div class="da-panel"><div class="da-panel-title"><div><h2>DNS aliases</h2><p>Saved names → trusted DNS replies → separate PF tables → ordinary firewall rules.</p></div><span class="da-pill '.$health['class'].'">'.da_h($health['label']).'</span></div>';
     if($error!=='')echo '<p class="da-error">'.da_h($error).'</p>';

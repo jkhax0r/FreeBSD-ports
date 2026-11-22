@@ -90,7 +90,10 @@ class ConfirmationAuthority:
             if not self.scope_seeded or self.scope_policies is not selected:
                 keys.extend(scope_policy_key(pattern) for policy in selected for pattern in policy.patterns)
                 self.scope_exact=frozenset(pattern for policy in selected for pattern in policy.patterns if not pattern.startswith('*.'))
-                self.scope_suffixes=tuple(pattern[1:] for policy in selected for pattern in policy.patterns if pattern.startswith('*.'))
+                suffixes=tuple(pattern[1:] for policy in selected for pattern in policy.patterns if pattern.startswith('*.'))
+                # Small tuples match in C. For large lists, examine only the
+                # query's label boundaries, regardless of configured list size.
+                self.scope_suffixes=frozenset(suffixes) if len(suffixes)>=128 else suffixes
             keys.extend(scope_name_keys(name)[0] for name in self._scope_dependencies(writer.ledger,event))
             for offset in range(0,len(keys),4096):
                 self.native.scope_add(self.publisher,tuple(keys[offset:offset+4096]))
@@ -101,13 +104,23 @@ class ConfirmationAuthority:
             # continues. Never proceed with an incomplete interest index.
             self.close()
 
+    def _direct_interest(self,query):
+        if query in self.scope_exact:return True
+        suffixes=self.scope_suffixes
+        if isinstance(suffixes,tuple):return query.endswith(suffixes)
+        dot=query.find('.')
+        while dot>=0:
+            if query[dot:] in suffixes:return True
+            dot=query.find('.',dot+1)
+        return False
+
     def _scope_dependencies(self,ledger,event):
         """Conservative closure of old and proposed edges, before mutation."""
         pending=[root[1] for root in ledger.anchors] if not self.scope_seeded else []
         proposed={}
         if event is not None:
             query=event['qname'];rows=event['records']
-            direct=query in self.scope_exact or query.endswith(self.scope_suffixes)
+            direct=self._direct_interest(query)
             for row in rows:
                 if row['type']=='CNAME':proposed.setdefault(row['name'],set()).add(row['value'])
             if direct and (not self.scope_seeded or query not in ledger._roots or proposed):pending.append(query)

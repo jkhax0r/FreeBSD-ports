@@ -228,7 +228,7 @@ def entry():
         if name=='counterram':control=bool(args and args[0]in('enable','disable','abort'))
     else:
         if root!=Path('/usr/local/libexec/dnsalias'):raise ValueError('native service/alias entry requires the canonical production source; private rc.d scripts are not executable fixtures')
-        if len(args)!=1 or args[0] not in (('start','stop','enable','disable','status') if kind=='service' else ('start','stop','run','status')):raise ValueError('explicit native service operation required')
+        if len(args)!=1 or args[0] not in (('start','stop','enable','disable','status') if kind=='service' else ('start','stop','run','status','display_status')):raise ValueError('explicit native service operation required')
         data=Path('/var/db/dnsalias');arguments=args;module='dnsalias.serviceboot' if kind=='service' else 'dnsalias.aliasservice';control=args[0] in ('start','stop','enable','disable')
     with Lifetime(root,data,mode=mode,control=control):
         sys.modules['dnsalias.lifecycle']=sys.modules[__name__]

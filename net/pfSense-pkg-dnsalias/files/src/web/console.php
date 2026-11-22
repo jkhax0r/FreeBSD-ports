@@ -47,8 +47,8 @@ function da_table($headers,$rows,$class='') {
             elseif (isset($c['domain_label'])) { da_labels_cell_render($c); }
             elseif (isset($c['url'])) { echo '<a href="'.da_h($c['url']).'"'.(isset($c['client_ip'])?' data-client-ip="'.da_h($c['client_ip']).'"':'').'>'.da_h($c['text']).'</a>'; }
             elseif (isset($c['badge'])) { echo '<span class="da-pill da-'.(in_array($c['badge'],['pass','block'],true)?$c['badge']:'neutral').'">'.da_h($c['text']).'</span>'; }
-            elseif (isset($c['detail'])) { echo '<button type="button" class="da-detail" data-detail="'.da_h(json_encode($c['detail'],JSON_INVALID_UTF8_SUBSTITUTE)).'">'.da_h($c['label']??'Details').' <span aria-hidden="true">↗</span></button>'; }
-            elseif (isset($c['review'])) { foreach (['allow'=>'Review allow','block'=>'Review block'] as $intent=>$label) { echo '<button type="button" class="da-review" data-review="'.da_h(json_encode($c['review']+['intent'=>$intent],JSON_INVALID_UTF8_SUBSTITUTE)).'">'.da_h($label).'</button> '; } }
+            elseif (isset($c['detail'])) { echo '<button type="button" class="da-detail" data-detail=' . da_json_attr($c['detail']) . '>'.da_h($c['label']??'Details').' <span aria-hidden="true">↗</span></button>'; }
+            elseif (isset($c['review'])) { foreach (['allow'=>'Review allow','block'=>'Review block'] as $intent=>$label) { echo '<button type="button" class="da-review" data-review=' . da_json_attr($c['review']+['intent'=>$intent]) . '>'.da_h($label).'</button> '; } }
             elseif (isset($c['hint'])) { echo '<span tabindex="0" title="'.da_h($c['hint']).'">'.da_h($c['text']).'</span>'; }
             elseif (isset($c['time']) && is_numeric($c['time'])) { echo '<time datetime="'.gmdate('c',(int)$c['time']).'" data-utc="'.da_h($c['time']).'">'.da_h($c['text']).'</time>'; }
             else { echo da_h($c['text']??''); }

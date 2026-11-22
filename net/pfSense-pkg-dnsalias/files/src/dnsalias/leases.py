@@ -16,9 +16,14 @@ def dns_name(value):
     return _dns_name(value) if type(value) is str else _dns_name.__wrapped__(value)
 
 
+_CANONICAL_DNS_NAME = re.compile(r"[a-z0-9_-]{1,63}(?:\.[a-z0-9_-]{1,63})*")
+
+
 @lru_cache(maxsize=16384)
 def _dns_name(value):
     # Only bounded strings enter this cache; no TTL, policy or trust result.
+    if type(value) is str and len(value) <= 253 and _CANONICAL_DNS_NAME.fullmatch(value):
+        return value
     name = (value[:-1] if value.endswith(".") else value).encode("idna").decode("ascii").lower()
     if len(name) > 253 or any(not re.fullmatch(r"[a-z0-9_-]{1,63}", x) for x in name.split(".")):
         raise ValueError("invalid DNS label")

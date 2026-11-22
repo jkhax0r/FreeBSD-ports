@@ -3,6 +3,12 @@
 function da_h($value) {
     return htmlspecialchars((string)$value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 }
+// A single-quoted attribute lets JSON retain its structural double quotes.
+// Escape HTML metacharacters and encode apostrophes inside JSON strings.
+function da_json_attr($value): string {
+    $json=json_encode($value, JSON_HEX_APOS | JSON_INVALID_UTF8_SUBSTITUTE | JSON_THROW_ON_ERROR);
+    return "'" . htmlspecialchars($json, ENT_NOQUOTES | ENT_SUBSTITUTE, 'UTF-8') . "'";
+}
 function da_ip_canonical(string $value): string {
     // Match the packaged Python3.11 collectors' text. Native inet_ntop can
     // retain a dotted IPv4 tail in IPv6; that spelling misses exact SQL keys.

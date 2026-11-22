@@ -54,7 +54,8 @@ function da_alias_members_model(string $directory,array $policy,array $service,i
         $db=new SQLite3($path,SQLITE3_OPEN_READONLY);$db->enableExceptions(true);$db->busyTimeout(250);
         $params=[':since'=>$now-$v['window']*60,':until'=>$now];
         $where=da_alias_pattern_sql($policy['names'],'domain',$params);
-        $v['domains']=da_rows($db,"SELECT domain,sum(kind='dns_query') AS queries,sum(kind='dns_reply') AS replies,sum(kind='dns_reply_log') AS reply_logs,sum(kind='dns_policy_log') AS policy_logs,max(time) AS latest FROM events WHERE kind IN ('dns_query','dns_reply','dns_reply_log','dns_policy_log') AND time>=:since AND time<=:until AND $where GROUP BY domain ORDER BY replies DESC,queries DESC,domain LIMIT 101",$params);
+        // Match the EventStore partial index predicate so exact names can seek by domain and time.
+        $v['domains']=da_rows($db,"SELECT domain,sum(kind='dns_query') AS queries,sum(kind='dns_reply') AS replies,sum(kind='dns_reply_log') AS reply_logs,sum(kind='dns_policy_log') AS policy_logs,max(time) AS latest FROM events WHERE kind IN ('dns_query','dns_reply_log','dns_policy_log','dns_reply') AND time>=:since AND time<=:until AND $where GROUP BY domain ORDER BY replies DESC,queries DESC,domain LIMIT 101",$params);
         $v['statistics_available']=true;
         if($v['members']){
             $slots=[];$ips=[':since'=>$params[':since'],':until'=>$now];
@@ -83,7 +84,7 @@ function da_alias_preview(array $policy,int $window=60): void {
     if(count($policy['names'])>count($shown))echo '<small>+'.da_h(count($policy['names'])-count($shown)).' more</small>';
     echo '<small>Click the alias for IPs and observed counts.</small></span></span>';
 }
-function da_alias_members_render(?array $v,bool $can=false): void {
+function da_alias_members_render(?array $v,bool $can=false,bool $show_names=false): void {
     $window=$v['window']??60;
     echo '<p class="da-alias-back"><a href="dnsalias_status.php?view=aliases&amp;window='.da_h($window).'">← Back to DNS aliases</a></p><div class="da-panel" id="da-alias-members">';
     if($v===null){echo '<h2>DNS alias not found</h2></div>';return;}
@@ -91,7 +92,14 @@ function da_alias_members_render(?array $v,bool $can=false): void {
     if($can)echo '<a href="dnsalias_status.php?view=aliases&amp;window='.da_h($window).'&amp;edit_alias='.rawurlencode($v['policy']['name']).'#da-alias-editor">Edit alias ↗</a>';
     echo '</div>';
     if($v['error']!=='')echo '<p class="da-error">'.da_h($v['error']).'</p>';
-    echo '<details class="da-domain-aliases"><summary>Saved names and patterns · '.da_h(count($v['policy']['names'])).'</summary><p>'.da_h(implode(', ',$v['policy']['names'])).'</p></details>';
+    $names=$v['policy']['names'];
+    $preview=count($names)>64&&!$show_names;
+    echo '<details class="da-domain-aliases" id="da-saved-names"'.($show_names?' open':'').'><summary>Saved names and patterns · '.da_h(count($names)).'</summary><p>'.da_h(implode(', ',$preview?array_slice($names,0,16):$names)).'</p>';
+    if($preview){
+        $url='dnsalias_status.php?view=aliases&inspect_members='.rawurlencode($v['policy']['name']).'&window='.$window.'&show_names=1#da-saved-names';
+        echo '<a href="'.da_h($url).'">Show all '.da_h(count($names)).' saved names and patterns</a>';
+    }
+    echo '</details>';
     $by=[];foreach(array_slice($v['answers'],0,500) as $r)$by[$r['value']][]=$r;
     $rows=[];
     foreach($v['members'] as $ip){

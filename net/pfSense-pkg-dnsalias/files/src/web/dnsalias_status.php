@@ -21,7 +21,8 @@ if(isset($_GET['alias_popup'])&&($_SERVER['REQUEST_METHOD']??'GET')==='GET'){
     header('Content-Type: application/json; charset=utf-8');header('Cache-Control: no-store');header('X-Content-Type-Options: nosniff');
     try{
         if(!is_string($_GET['alias_popup'])||!preg_match('/^[a-z][a-z0-9_]{0,22}$/D',$_GET['alias_popup']))throw new InvalidArgumentException('Saved DNS alias required');
-        $payload=da_alias_popup_payload($_GET['alias_popup'],dnsalias_policies_read(),da_alias_service('status'),time());
+        $policies=dnsalias_policies_read();$name=$_GET['alias_popup'];
+        $payload=da_alias_popup_payload($name,$policies,da_alias_display_status($policies,$name),time());
         echo json_encode($payload,JSON_THROW_ON_ERROR|JSON_HEX_TAG|JSON_HEX_AMP|JSON_HEX_APOS|JSON_HEX_QUOT);
     }catch(OutOfBoundsException $error){http_response_code(404);echo '{"error":"Alias not found"}';}
     catch(InvalidArgumentException $error){http_response_code(400);echo '{"error":"Invalid alias"}';}
@@ -79,10 +80,16 @@ try {
         else throw new RuntimeException('Unknown alias action');
         header('Location: dnsalias_status.php?view=aliases'.($_POST['alias_op']==='settings'?'&settings=1':''),true,303);exit;
     }
-    if(($_GET['view']??'')==='aliases'){$da_aliases=dnsalias_policies_read();$da_service=da_alias_service('status');}
-}catch(Throwable $e){
-    $da_alias_error=$e->getMessage();
-    try{$da_aliases=dnsalias_policies_read();$da_service=da_alias_service('status');}catch(Throwable $ignored){}
+}catch(Throwable $e){$da_alias_error=$e->getMessage();}
+if(($_GET['view']??'')==='aliases'){
+    try{
+        $da_aliases=dnsalias_policies_read();
+        // Only the list, editor, and members view display live PF membership.
+        if(isset($_GET['inspect_members'])||(!isset($_GET['inspect_alias'])&&($_GET['settings']??'')!=='1')){
+            $selected=isset($_GET['inspect_members'])&&is_string($_GET['inspect_members'])?$_GET['inspect_members']:null;
+            $da_service=da_alias_display_status($da_aliases,$selected);
+        }
+    }catch(Throwable $e){if($da_alias_error==='')$da_alias_error=$e->getMessage();}
 }
 try {
     $da_request=da_trial_request('status');

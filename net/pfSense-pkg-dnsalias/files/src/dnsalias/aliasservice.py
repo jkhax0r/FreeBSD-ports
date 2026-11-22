@@ -4,26 +4,20 @@ Configuration owns names/tables; the running trusted reply ledger owns IPs.
 No session timer, periodic DNS resolving, saved IP list or automatic rules.
 """
 import argparse
-from dataclasses import asdict
 import fcntl
 import json
 import os
 from pathlib import Path
-import platform
-import pwd
 import signal
 import stat
 import subprocess
 import sys
 import time
-import xml.etree.ElementTree as ET
 
 from .leases import Policy
 from .pfapi import NativePFTables
 from .processwatch import ProcessLifetimeWatch
 from .reloadlock import SharedReloadLock,ReloadBusy
-from .runtimecontrol import RuntimeControl,load_credentials,status_value
-from .sourceaudit import SourceAudit,SourceSpec
 from .lifecycle import current,guarded,Lifetime
 
 ROOT=Path('/usr/local/libexec/dnsalias')
@@ -49,7 +43,10 @@ def read_saved_for_refresh():
 def saved(root=ROOT):
     p=subprocess.run(['/usr/local/bin/php',str(root/'native/policies.php')],capture_output=True,text=True,timeout=2)
     if p.returncode or len(p.stdout)>262144+128:raise ValueError('saved alias configuration unavailable: '+p.stderr[:160])
-    value=json.loads(p.stdout)
+    return validated_policies(json.loads(p.stdout))
+
+
+def validated_policies(value):
     if value.get('format')!='dnsalias-saved-aliases-1':raise ValueError('saved aliases format changed')
     # Use the shared canonical Python name validator as a second boundary.
     policies=value['policies']
@@ -63,6 +60,12 @@ def saved(root=ROOT):
 
 def target(root=ROOT,data=DATA):
     """Inspect the actual selected Unbound hook and sources at every start."""
+    from dataclasses import asdict
+    import platform
+    import pwd
+    import xml.etree.ElementTree as ET
+    from .runtimecontrol import RuntimeControl,load_credentials,status_value
+    from .sourceaudit import SourceAudit,SourceSpec
     from .trialservice import COMPONENTS,validate_target
     identity=pwd.getpwnam('unbound');directory=Path('/var/unbound')
     credentials=load_credentials(str(directory),expected_uid=identity.pw_uid,expected_gid=identity.pw_gid)
@@ -112,7 +115,7 @@ def process():
     return pid
 
 
-def status():
+def status(*, display_policies=None):
     try:value=json.loads((DATA/'alias-status.json').read_text())
     except FileNotFoundError:value={'state':'stopped','tables':{}}
     pid=process()
@@ -130,7 +133,8 @@ def status():
     if pid is None and value.get('state') in ('starting','running'):value['state']='stopped unexpectedly'
     if value.get('state') in ('running','failed','stopped unexpectedly'):
         try:
-            names=tuple('da_'+p['name'] for p in saved(ROOT))
+            policies=saved(ROOT) if display_policies is None else display_policies
+            names=tuple('da_'+p['name'] for p in policies)
             if names:
                 with NativePFTables('',names) as observed:tables=observed.snapshot()
                 value['table_counts']={n:len(v) for n,v in tables.items()}
@@ -191,6 +195,7 @@ def run(*,confirmation_reuse=True,confirmation_refresh=True):
         raise ValueError('refresh requires explicit confirmation test mode')
     import manage
     from .collector import write_json
+    from .runtimecontrol import RuntimeControl,load_credentials
     from .indexedproofs import IndexedProofLedger
     from .membershipgate import MembershipGate,create as create_gate
     from .pfwriter import LeaseTableWriter
@@ -370,11 +375,18 @@ def run(*,confirmation_reuse=True,confirmation_refresh=True):
 
 
 def main():
-    p=argparse.ArgumentParser();p.add_argument('operation',choices=('start','stop','status','run'));args=p.parse_args()
+    p=argparse.ArgumentParser();p.add_argument('operation',choices=('start','stop','status','display_status','run'));args=p.parse_args()
     if os.geteuid()!=0 or not sys.platform.startswith('freebsd'):raise ValueError('native root service required')
     if current(ROOT,DATA) is None:
         os.execv('/usr/local/bin/python3.11',['/usr/local/bin/python3.11','-B',str(ROOT/'dnsalias/lifecycle.py'),'alias',args.operation])
     if args.operation=='run':run()
+    elif args.operation=='display_status':
+        # The authenticated page supplies its already ownership-checked native
+        # snapshot. Keep the independent Python validation and read PF now.
+        raw=sys.stdin.buffer.read(262144+129)
+        if len(raw)>262144+128:raise ValueError('alias display snapshot exceeds bound')
+        policies=validated_policies(json.loads(raw))
+        print(json.dumps(status(display_policies=policies),separators=(',',':')))
     else:print(json.dumps(globals()[args.operation]()))
 
 
