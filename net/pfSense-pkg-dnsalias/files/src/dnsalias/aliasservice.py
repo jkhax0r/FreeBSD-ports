@@ -18,20 +18,13 @@ import sys
 import time
 import xml.etree.ElementTree as ET
 
-from .collector import write_json
-from .indexedproofs import IndexedProofLedger
 from .leases import Policy
-from .membershipgate import MembershipGate,create as create_gate
 from .pfapi import NativePFTables
-from .pfwriter import LeaseTableWriter
 from .processwatch import ProcessLifetimeWatch
 from .reloadlock import SharedReloadLock,ReloadBusy
 from .runtimecontrol import RuntimeControl,load_credentials,status_value
 from .sourceaudit import SourceAudit,SourceSpec
-from .trialfeed import TrialFeed
-from .trialservice import COMPONENTS,run as run_feed,validate_target
 from .lifecycle import current,guarded,Lifetime
-from .policyrefresh import PolicyRefresh
 
 ROOT=Path('/usr/local/libexec/dnsalias')
 DATA=Path('/var/db/dnsalias')
@@ -70,6 +63,7 @@ def saved(root=ROOT):
 
 def target(root=ROOT,data=DATA):
     """Inspect the actual selected Unbound hook and sources at every start."""
+    from .trialservice import COMPONENTS,validate_target
     identity=pwd.getpwnam('unbound');directory=Path('/var/unbound')
     credentials=load_credentials(str(directory),expected_uid=identity.pw_uid,expected_gid=identity.pw_gid)
     control=RuntimeControl(credentials['context'],address='127.0.0.1',port=953,
@@ -196,7 +190,14 @@ def run(*,confirmation_reuse=True,confirmation_refresh=True):
     if type(confirmation_refresh) is not bool or (confirmation_refresh and not confirmation_reuse):
         raise ValueError('refresh requires explicit confirmation test mode')
     import manage
+    from .collector import write_json
+    from .indexedproofs import IndexedProofLedger
+    from .membershipgate import MembershipGate,create as create_gate
+    from .pfwriter import LeaseTableWriter
+    from .policyrefresh import PolicyRefresh
+    from .trialfeed import TrialFeed
     from .triallaunch import _resource_limits
+    from .trialservice import run as run_feed
     _resource_limits(confirmation_refresh=confirmation_refresh);manage.verify(ROOT,DATA)
     lock=os.open(DATA/'alias-service.lock',os.O_RDWR|os.O_CREAT|os.O_NOFOLLOW,0o600)
     fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)

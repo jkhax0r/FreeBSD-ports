@@ -70,6 +70,8 @@ function dnsalias_policies_read(): array {
     $raw=config_get_path('installedpackages/dnsalias/policy_json','');
     if($raw==='')return [];
     if(!is_string($raw)||strlen($raw)>262144||!str_starts_with(ltrim($raw),'['))throw new RuntimeException('Saved policy list or size invalid');
+    static $lastRaw=null,$lastPolicies=[];
+    if($raw===$lastRaw)return $lastPolicies;
     $v=json_decode($raw,true,16,JSON_THROW_ON_ERROR);
     if(!is_array($v)||!array_is_list($v)||count($v)>127)throw new RuntimeException('Invalid saved policy list');
     $seen=[];
@@ -88,6 +90,7 @@ function dnsalias_policies_read(): array {
             $patterns[$n]=true;
         }
     }
+    $lastRaw=$raw;$lastPolicies=$v;
     return $v;
 }
 function dnsalias_policies_expected(array $p): array {

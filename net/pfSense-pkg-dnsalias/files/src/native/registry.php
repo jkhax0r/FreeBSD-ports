@@ -10,6 +10,10 @@
  */
 function dnsalias_registry_policies($raw): array {
     if(!is_string($raw)||strlen($raw)>262144||!str_starts_with(ltrim($raw),'['))throw new RuntimeException('Bounded saved DNS policy list required');
+    // A request may parse the same saved configuration several times. Retain
+    // only a completely validated value and compare its exact source bytes.
+    static $lastRaw=null,$lastPolicies=[];
+    if($raw===$lastRaw)return $lastPolicies;
     $policies=json_decode($raw,true,16,JSON_THROW_ON_ERROR);
     if(!is_array($policies)||!array_is_list($policies)||count($policies)>127)throw new RuntimeException('Invalid saved DNS policies');
     $seen=[];
@@ -28,6 +32,7 @@ function dnsalias_registry_policies($raw): array {
             $names[$name]=true;
         }
     }
+    $lastRaw=$raw;$lastPolicies=$policies;
     return $policies;
 }
 function dnsalias_registry_definitions(array $policies): array {

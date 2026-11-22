@@ -13,6 +13,7 @@ permanently quarantines this instance. Reads remain available for inspection;
 there is no automatic mutation retry, adoption or write re-enrollment.
 """
 import ctypes as C
+from functools import lru_cache
 import hashlib
 import ipaddress
 import os
@@ -59,16 +60,28 @@ def _namespace(anchor,names):
     return anchor,tuple(names)
 
 
+def _checked_address(text):
+    if type(text) is not str or '%' in text:raise ValueError('canonical literal host address required')
+    address=ipaddress.ip_address(text)
+    if str(address)!=text or address.is_unspecified or address.is_loopback or address.is_multicast:
+        raise ValueError('canonical non-sinkhole destination required')
+    return address
+
+
+@lru_cache(maxsize=4096)
+def _packed_host(text):
+    # The cache contains only immutable address bytes and their family. Table
+    # membership, changed counts and source ownership are checked on each write.
+    address = _checked_address(text)
+    return address.packed, socket.AF_INET if address.version == 4 else socket.AF_INET6
+
+
 def _addresses(values,limit):
     if type(values) is not set or len(values)>limit or any(type(value) is not str for value in values):
         raise ValueError('bounded explicit host address set required')
     output=[]
     for text in sorted(values):
-        if type(text) is not str or '%' in text:raise ValueError('canonical literal host address required')
-        address=ipaddress.ip_address(text)
-        if str(address)!=text or address.is_unspecified or address.is_loopback or address.is_multicast:
-            raise ValueError('canonical non-sinkhole destination required')
-        output.append(address)
+        output.append(_checked_address(text))
     return output
 
 
@@ -236,12 +249,12 @@ class NativePFTables:
     def _change(self,name,addresses,add):
         if not self.writable or self.state!='enrolled':raise PFUnqualified('writer is not enrolled or is quarantined')
         table=self._table(name);prior=self.known[name]
+        if (type(addresses) is not set or len(addresses)>MAX_BATCH
+                or any(type(value) is not str or len(value)>45 for value in addresses)):
+            raise ValueError('bounded explicit host address set required')
         if add:
-            values=[(address.packed,socket.AF_INET if address.version==4 else socket.AF_INET6)
-                for address in _addresses(addresses,MAX_BATCH)]
+            values=[_packed_host(value) for value in sorted(addresses)]
         else:
-            if type(addresses) is not set or len(addresses)>MAX_BATCH or any(type(value) is not str for value in addresses):
-                raise ValueError('bounded explicit host address set required')
             if not addresses<=prior:raise ValueError('cannot remove an untracked destination')
             # Already-enrolled canonical hosts need no second Python IP parse.
             # Check against the binary baseline as well before any mutation.

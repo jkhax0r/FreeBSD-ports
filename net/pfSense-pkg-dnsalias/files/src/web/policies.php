@@ -119,7 +119,7 @@ function da_alias_service(string $op): array {
     if(!in_array($op,['start','stop','status','boot_enable','boot_disable','service_start','service_stop'],true))throw new RuntimeException('Invalid service action');
     $boot=str_starts_with($op,'boot_');
     $native=str_starts_with($op,'service_');
-    $p=proc_open(['/usr/local/bin/python3.11','-B','-m',($boot||$native)?'dnsalias.serviceboot':'dnsalias.aliasservice',($boot?substr($op,5):($native?substr($op,8):$op))],
+    $p=proc_open(['/usr/local/bin/python3.11','-B','/usr/local/libexec/dnsalias/dnsalias/lifecycle.py',($boot||$native)?'service':'alias',($boot?substr($op,5):($native?substr($op,8):$op))],
         [0=>['pipe','r'],1=>['pipe','w'],2=>['pipe','w']],$pipes,'/usr/local/libexec/dnsalias');
     if(!is_resource($p))throw new RuntimeException('Service control unavailable');
     // Status includes applied names, PF members and service health.
