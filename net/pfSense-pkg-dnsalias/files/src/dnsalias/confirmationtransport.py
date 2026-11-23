@@ -3,8 +3,9 @@
 Caller supplies an owned native reader and enrolled helper lifetime check.
 Each ACK socket has its own request lock. A common lock protects proof and
 clock state, and is released before waiting for an ACK on any socket.
-Every query still sends its full fresh observation. A receipt only avoids the
-wait for an identical already-committed answer; it is not a firewall decision.
+Every query still sends its full fresh observation. An empty cached answer can
+return after queuing because it has no address to install. New membership
+still requires the writer to process the observation.
 """
 import re
 import select
@@ -13,6 +14,37 @@ import time
 from .confirmationkey import confirmation_key,key_with_loss_counter,scope_reply_keys
 from .ipc import RejectedMessage,receive,send_observation
 from .replygate import ReplyGate,RejectedEpoch,clock
+
+
+def _empty_cached_answer(event, now):
+    """A cached IN A/AAAA response with no answer RRsets cannot justify a lease."""
+    if (event.get('callback') != 'cache'
+            or event.get('extractor_version') != 'unbound-1.26.1-scalars-v1'
+            or type(event.get('answer_rrsets')) is not int or event['answer_rrsets'] != 0
+            or type(event.get('records')) is not list or event['records']
+            or type(event.get('qclass')) is not int or event['qclass'] != 1
+            or type(event.get('qtype')) is not int or event['qtype'] not in (1, 28)):
+        return False
+    if (event.get('policy_block_registry_match') is not False
+            or event.get('policy_bypass_client') is not False
+            or type(event.get('transport_dropped_before')) is not int or event['transport_dropped_before'] != 0):
+        return False
+    basis = event.get('callback_start_time')
+    expiry = event.get('reply_ttl')
+    if (type(basis) not in (int, float) or not 0 <= now - basis < 5
+            or type(expiry) is not int or not 0 < expiry - now <= 604800):
+        return False
+    flags = event.get('reply_flags')
+    if type(flags) is not int or not 0 <= flags <= 65535 or not (flags & 0x8000):
+        return False
+    # Require an ordinary, untruncated answer with the reserved header bit clear.
+    if flags & (0x7800 | 0x0200 | 0x0040):
+        return False
+    header_rcode = flags & 15
+    callback_rcode = event.get('rcode')
+    # Unbound can supply a zero callback rcode for a cached NXDOMAIN header.
+    return (type(callback_rcode) is int and header_rcode in (0, 3)
+            and callback_rcode in (0, header_rcode))
 
 
 class ConfirmationTransport:
@@ -139,6 +171,7 @@ class ConfirmationTransport:
             now,utc=time.monotonic(),time.time()
             if now>=deadline:return None,'ack_expired'
             digest=None
+            empty_cached=False
             if self.state=='ready':
                 if (event.get('profile_id')!=self.profile_id or event.get('resolver_generation')!=self.generation
                     or event.get('generation_started_monotonic')!=self.started):
@@ -148,11 +181,14 @@ class ConfirmationTransport:
                         if now-clock(event['monotonic'])>=self.gate.max_age:return None,'ack_expired'
                         self.gate.accept(event,received_monotonic=now,received_utc=utc)
                     except (RejectedEpoch,KeyError):self.disable('reply_clock_unqualified')
-                if self._alive():digest=key_with_loss_counter(event,self.key)
+                if self._alive():
+                    empty_cached=event.get('answer_rrsets')==0 and _empty_cached_answer(event,utc)
+                    if not empty_cached:
+                        digest=key_with_loss_counter(event,self.key)
             receipt=self.lookup(digest) if digest is not None else None
             reuse=receipt is not None and self._alive()
             scope_keys=scope_receipt=None
-            if not reuse and self.scope_absent is not None and self._alive():
+            if not empty_cached and not reuse and self.scope_absent is not None and self._alive():
                 scope_keys=scope_reply_keys(event)
                 if scope_keys is not None:scope_receipt=self.scope_absent(scope_keys)
             if not reuse:
@@ -161,11 +197,15 @@ class ConfirmationTransport:
             if result!='queued':return None,result
             again=self.lookup(digest) if reuse else None
             scoped=(scope_receipt is not None and self.scope_absent(scope_keys)==scope_receipt)
-            if ((again is not None and again[0]==receipt[0]) or scoped) and time.monotonic()<deadline and self._alive():
+            if ((again is not None and again[0]==receipt[0]) or scoped or empty_cached) and time.monotonic()<deadline and self._alive():
                 # Bound bookkeeping without waiting for other requests. Every
                 # admitted observation still goes to the bounded kernel queue.
                 if len(self.pending)>=self.MAX_PENDING*self.socket_count:del self.pending[next(iter(self.pending))]
                 self.pending[token]=(deadline,slot)
+                # Empty answers still reach the sole writer for source checks
+                # and statistics. No membership was installed or reused.
+                if empty_cached:
+                    return None,'ignored'
                 self.reused+=1
                 if scoped:self.scope_reused+=1
                 return None,'applied'

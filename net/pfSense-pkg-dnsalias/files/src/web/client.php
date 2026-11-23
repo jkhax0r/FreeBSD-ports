@@ -455,8 +455,8 @@
   const refresh=root.querySelector('#da-refresh');
   const savedRefresh=preference('refresh');
   if(!refresh.disabled&&['0','30','60'].includes(savedRefresh))refresh.value=savedRefresh;
-  const hasAliasDraft=()=>{
-    for(const field of root.querySelectorAll('.da-alias-form input:not([type="hidden"]),.da-alias-form textarea,.da-alias-form select')){
+  const hasFormDraft=()=>{
+    for(const field of root.querySelectorAll(':is(.da-alias-form,.da-filters) :is(input:not([type="hidden"]),textarea,select)')){
       if(field.tagName==='SELECT'){
         const initial=field.querySelector('option[selected]')||field.options[0];
         if(initial&&field.value!==initial.value)return true;
@@ -470,7 +470,7 @@
     clearTimeout(timer);
     if(refresh.disabled||refresh.value==='0'||root.querySelector('#da-trial-control'))return;
     timer=setTimeout(()=>{
-      if(document.hidden||dialog.open||policyDialog.open||labelDialog?.open||hasAliasDraft())arm();
+      if(document.hidden||dialog.open||policyDialog.open||labelDialog?.open||hasFormDraft())arm();
       else location.reload();
     },Number(refresh.value)*1000);
   };
