@@ -111,7 +111,12 @@ class RuntimeDeploymentAudit:
             runtime=None
             if (self.runtime_checked is None or started-self.runtime_checked>=self.runtime_interval) and started>=self.runtime_retry_after:
                 try:
-                    runtime=self.control.capture(self.watch,budget_seconds=min(.7,remaining()) if self.runtime_interval else remaining())
+                    budget=remaining()
+                    if self.runtime_interval:
+                        # Startup reads all options twice, before any receipt exists.
+                        # Leave time inside the worker deadline for the closing audit.
+                        budget=min(.9 if self.runtime_checked is None else .7,budget)
+                    runtime=self.control.capture(self.watch,budget_seconds=budget)
                 except RuntimeControlError as exc:
                     if (self.runtime_interval and self.runtime_checked is None and not self.initial_timeout_seen
                             and isinstance(exc.__cause__,TimeoutError)):
@@ -375,7 +380,7 @@ class RuntimeControl:
         second={name:option_value(name,read(name)) for name in sorted(SETTINGS)}
         after=status_value(read(None))
         ended=time.monotonic()
-        if ended<started or ended>=deadline or not watch.alive():
+        if ended<started or not watch.alive():
             raise RuntimeControlError('runtime capture expired or producer ended')
         if first!=second: raise RuntimeControlError('runtime settings changed during capture')
         if {k:v for k,v in before.items() if k!='uptime'}!={k:v for k,v in after.items() if k!='uptime'}:
@@ -390,6 +395,10 @@ class RuntimeControl:
             raise RuntimeControlError('runtime uptime outside capture interval: '+str(uptime_advance)+' ticks / '+str(uptime_limit)+' allowed')
         if first['module-config']!=before['modules'] or int(first['num-threads'])!=before['threads']:
             raise RuntimeControlError('runtime status and settings disagree')
+        # Both status reads and option snapshots agree. A late final TLS
+        # response is a timeout; any identity or setting change above is final.
+        if ended>=deadline:
+            raise RuntimeControlError('runtime capture deadline exceeded') from TimeoutError('runtime control read deadline')
         return {'format':'dnsalias-runtime-options-1','settings':first,'status':after,
                 'process_lifetime_id':watch.lifetime_id,'started_monotonic':started,
                 'finished_monotonic':ended,'duration_ms':(ended-started)*1000,

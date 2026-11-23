@@ -45,7 +45,7 @@ class AuditWorker:
         self.capture=capture;self.interval=interval_seconds;self.budget=budget_seconds
         self.stop=threading.Event();self.lock=threading.Lock();self.thread=None
         self.latest=None;self.sequence=0;self.delivered=0;self.failure=None
-        self.initial_retry=False
+        self.initial_retry=False;self.transport_failure=None
 
     def start(self):
         if self.thread is not None or self.stop.is_set(): raise ValueError('worker cannot be restarted')
@@ -76,6 +76,10 @@ class AuditWorker:
                 # Do not publish exception messages, which may contain file
                 # contents, credentials or an unbounded remote response.
                 error='audit_capture_failed:'+type(exc).__name__[:60]
+                cause=exc.__cause__
+                if isinstance(cause,TimeoutError):self.transport_failure='timeout'
+                elif isinstance(cause,ConnectionRefusedError):self.transport_failure='connection_refused'
+                elif isinstance(cause,ConnectionResetError):self.transport_failure='connection_reset'
             finished=time.monotonic()
             if not 0<=finished-started<=self.budget:error='audit_capture_deadline'
             if self.stop.is_set():break
@@ -119,8 +123,11 @@ class AuditWorker:
 
     def status(self):
         alive=self.thread is not None and self.thread.is_alive()
+        receipt=self.latest
         return {'state':('stopping' if alive else 'stopped') if self.stop.is_set() else
             'failed' if self.failure else 'running' if alive else 'not_started',
             'error':self.failure,'published':self.sequence,'delivered':self.delivered,
             'interval_seconds':self.interval,'capture_budget_seconds':self.budget,
+            'initial_read_retried':self.initial_retry,'transport_failure':self.transport_failure,
+            'last_capture_ms':round((receipt.finished-receipt.started)*1000,3) if receipt else None,
             'retained_receipt_limit':1,'enforcement_qualified':False}

@@ -55,6 +55,15 @@
   // identify elements within the selected view and must not hide that view.
   const hashView=location.hash.startsWith('#da-')?location.hash.slice(4):null;
   show(names.has(hashView)?hashView:root.dataset.view);
+  // Restore the visible search only on the history entry refreshed by this timer.
+  const savedSearch=history.state?.dnsAliasRefreshSearch;
+  if(savedSearch && search){
+    const state={...history.state};delete state.dnsAliasRefreshSearch;
+    history.replaceState(state,'');
+    if(savedSearch.url===location.href && savedSearch.view===root.dataset.view && typeof savedSearch.text==='string'){
+      search.value=savedSearch.text;applySearch();
+    }
+  }
   root.querySelectorAll('[data-nav]').forEach(a=>a.addEventListener('click',e=>{
     if(e.defaultPrevented||e.button!==0||e.ctrlKey||e.metaKey||e.shiftKey||e.altKey)return;
     if(!panels.some(p=>p.dataset.panel===a.dataset.nav))return;
@@ -471,7 +480,14 @@
     if(refresh.disabled||refresh.value==='0'||root.querySelector('#da-trial-control'))return;
     timer=setTimeout(()=>{
       if(document.hidden||dialog.open||policyDialog.open||labelDialog?.open||hasFormDraft())arm();
-      else location.reload();
+      else {
+        if(search?.value){
+          try{
+            history.replaceState({...history.state,dnsAliasRefreshSearch:{url:location.href,view:root.dataset.view,text:search.value}},'');
+          }catch(_){arm();return;}
+        }
+        location.reload();
+      }
     },Number(refresh.value)*1000);
   };
   refresh.addEventListener('change',()=>{preference('refresh',refresh.value);arm();});arm();
