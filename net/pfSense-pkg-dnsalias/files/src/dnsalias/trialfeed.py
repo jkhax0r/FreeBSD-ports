@@ -53,6 +53,7 @@ class FeedTelemetry:
         self.queue=queue.Queue(maxsize=128);self.stop=threading.Event()
         self.counters={'offered':0,'persisted':0,'dropped':0,'busy_batches':0}
         self.losses = {'queue_full': 0, 'worker_unavailable': 0, 'database_busy': 0}
+        self.last_database_busy = None
         self.exclusions={'request_deadline':0,'helper_outcome':0,'reply_metadata':0}
         self.error=None
         self.thread=threading.Thread(target=self._run,name='dnsalias-feed-statistics',daemon=True)
@@ -90,17 +91,19 @@ class FeedTelemetry:
         store=None
         try:
             while not self.stop.is_set():
+                started = time.monotonic()
                 try:
                     store=EventStore(self.path,self.session,busy_timeout_ms=1000,reply_details=True)
                     # This is the independent storage thread, after DNS ACK
                     # processing. Absorb ordinary short collector transactions
                     # without making the DNS producer wait or growing its queue.
                     if hasattr(store, 'db'):
-                        store.db.execute('PRAGMA busy_timeout=250')
+                        store.db.execute('PRAGMA busy_timeout=650')
                     break
                 except sqlite3.OperationalError as exc:
                     if getattr(exc,'sqlite_errorcode',0)&255 not in (sqlite3.SQLITE_BUSY,sqlite3.SQLITE_LOCKED):raise
-                    self.counters['busy_batches']+=1;self.stop.wait(.25)
+                    self._record_database_busy('open', started, 0)
+                    self.stop.wait(.25)
             if store is None:return
             draining = False
             while not self.stop.is_set() or not self.queue.empty():
@@ -139,6 +142,7 @@ class FeedTelemetry:
                         if hasattr(store, 'db'):
                             store.db.execute('PRAGMA busy_timeout=100')
                         draining = True
+                    started = time.monotonic()
                     try:self.counters['persisted']+=store.insert(events)
                     except sqlite3.OperationalError as exc:
                         code=getattr(exc,'sqlite_errorcode',0)&255
@@ -148,11 +152,20 @@ class FeedTelemetry:
                         # Fresh later observations can proceed after contention.
                         self.losses['database_busy'] += len(events)
                         self.counters['dropped'] += len(events)
-                        self.counters['busy_batches'] += 1
+                        self._record_database_busy('insert', started, len(events))
         except Exception as exc:
             self.error=type(exc).__name__
         finally:
             if store is not None:store.close()
+
+    def _record_database_busy(self, operation, started, dropped):
+        self.counters['busy_batches'] += 1
+        self.last_database_busy = {
+            'operation': operation,
+            'utc': time.time(),
+            'elapsed_ms': round((time.monotonic() - started) * 1000, 1),
+            'dropped': dropped,
+        }
 
     def close(self,wait_seconds=.2):
         self.stop.set()
@@ -174,7 +187,9 @@ class FeedTelemetry:
     def status(self):
         losses = dict(self.losses)
         excluded=dict(self.exclusions)
+        busy = self.last_database_busy
         return dict(self.counters)|{'dropped':sum(losses.values()),'dropped_by_reason':losses,'invalid':sum(excluded.values()),'excluded_by_reason':excluded,
+            'last_database_busy': dict(busy) if busy is not None else None,
             'error':self.error,'queued':self.queue.qsize(),
             'thread_alive':self.thread.is_alive(),'dns_waits_for_storage':False}
 

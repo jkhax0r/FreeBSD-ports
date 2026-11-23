@@ -18,7 +18,7 @@ import subprocess
 import time
 import uuid
 import zipfile
-from dnsalias.lifecycle import current,guarded
+from dnsalias.lifecycle import current,guarded,process_command
 
 ROOT=Path("/usr/local/libexec/dnsalias")
 DATA=Path("/var/db/dnsalias")
@@ -577,11 +577,11 @@ def owned_process(root=ROOT,data=DATA):
     raw=pidfile.read_text().strip()
     if not raw.isdigit() or int(raw)<=1: raise ValueError("invalid collector PID")
     pid=int(raw)
-    p=subprocess.run(["/bin/ps","-ww","-p",str(pid),"-o","command="],capture_output=True,text=True,timeout=3)
-    if p.returncode!=0 or not p.stdout.strip(): return None
+    command=process_command(pid,timeout=3)
+    if command is None:return None
     expected=(f"/usr/local/bin/python3.11 -B {root}/dnsalias/lifecycle.py collector --data-dir {data} --duration ",
               f"/usr/local/bin/python3.11 -B -m dnsalias.collector --data-dir {data} --duration ")
-    if not any(p.stdout.strip().startswith(prefix) and p.stdout.strip()[len(prefix):].isdigit() for prefix in expected):
+    if not any(command.startswith(prefix) and command[len(prefix):].isdigit() for prefix in expected):
         raise RuntimeError("PID belongs to another process; refusing signal")
     return pid
 

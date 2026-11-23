@@ -1,9 +1,27 @@
-"""Check the DNS behavior proof taken after a resolver reload."""
+"""Check resolver readiness and process observations used during recovery."""
+import subprocess
 import unittest
 from unittest.mock import Mock, patch
 
+from dnsalias.lifecycle import process_command
 from dnsalias.trialworker import await_control, match_baseline
 from dnsalias.runtimecontrol import RuntimeControlError
+
+
+class RecordedProcessStatus(unittest.TestCase):
+    def lookup(self, code, output, error):
+        with patch('subprocess.run', return_value=subprocess.CompletedProcess([], code, output, error)):
+            return process_command(12)
+
+    def test_readable_and_reaped_process(self):
+        self.assertEqual(self.lookup(0, 'service command\n', ''), 'service command')
+        self.assertIsNone(self.lookup(1, '', ''))
+
+    def test_failed_or_incomplete_lookup(self):
+        for result in ((2, '', ''), (0, '', ''), (1, ' ', ''), (1, '', 'warning'),
+                       (0, 'service command', 'warning'), (0, 'x' * 16385, '')):
+            with self.subTest(result=(result[0], len(result[1]), result[2])), self.assertRaises(ValueError):
+                self.lookup(*result)
 
 
 class RestoreReadiness(unittest.TestCase):

@@ -50,6 +50,7 @@ class ReplyExclusions(unittest.TestCase):
         self.assertEqual(report['excluded_by_reason'], {'request_deadline': 1, 'helper_outcome': 1, 'reply_metadata': 1})
         self.assertEqual(report['invalid'], 3)
         self.assertEqual(report['dropped'], 0)
+        self.assertIsNone(report['last_database_busy'])
         self.assertEqual(report['offered'], report['persisted'] + report['invalid'])
         self.assertEqual([event['mapping_status'] for event in store.saved],
                          ['reload_busy', 'memberships_synchronized_after_ack_deadline'])
@@ -91,7 +92,14 @@ class ReplyExclusions(unittest.TestCase):
         self.assertEqual((report['offered'], report['persisted'], report['dropped'], report['busy_batches']), (4, 0, 4, 1))
         self.assertIsNone(report['error'])
         self.assertEqual(feed.counters['dropped'], report['dropped'])
-        self.assertEqual(store.last_statement, 'PRAGMA busy_timeout=250')
+        self.assertEqual(store.last_statement, 'PRAGMA busy_timeout=650')
+        latest = report['last_database_busy']
+        self.assertEqual(set(latest), {'operation', 'utc', 'elapsed_ms', 'dropped'})
+        self.assertEqual((latest['operation'], latest['dropped']), ('insert', 2))
+        self.assertGreater(latest['utc'], 0)
+        self.assertGreaterEqual(latest['elapsed_ms'], 0)
+        latest['dropped'] = 0
+        self.assertEqual(feed.status()['last_database_busy']['dropped'], 2)
         report['dropped_by_reason']['database_busy'] = 0
         self.assertEqual(feed.status()['dropped'], 4)
 
@@ -122,13 +130,13 @@ class ReplyExclusions(unittest.TestCase):
             try:
                 feed.offer([item])
                 self.assertTrue(store.written.wait(2))
-                self.assertEqual(store.waits, ['PRAGMA busy_timeout=250'])
+                self.assertEqual(store.waits, ['PRAGMA busy_timeout=650'])
                 feed.offer([item] * 64)
                 self.assertFalse(feed.close(0))
             finally:
                 store.proceed.set()
                 self.assertTrue(feed.close(1))
-        self.assertEqual(store.waits, ['PRAGMA busy_timeout=250', 'PRAGMA busy_timeout=100'])
+        self.assertEqual(store.waits, ['PRAGMA busy_timeout=650', 'PRAGMA busy_timeout=100'])
         self.assertEqual(feed.status()['persisted'], 65)
         self.assertEqual(feed.status()['dropped'], 0)
 
@@ -156,6 +164,9 @@ class ReplyExclusions(unittest.TestCase):
         report = feed.status()
         self.assertEqual((report['offered'], report['persisted'], report['queued']), (2, 0, 0))
         self.assertEqual(report['dropped_by_reason'], {'queue_full': 0, 'worker_unavailable': 2, 'database_busy': 0})
+        self.assertEqual(report['busy_batches'], 1)
+        self.assertEqual(report['last_database_busy']['operation'], 'open')
+        self.assertEqual(report['last_database_busy']['dropped'], 0)
         self.assertTrue(feed.close(0))
         self.assertEqual(feed.status(), report)
 

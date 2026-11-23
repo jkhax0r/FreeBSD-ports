@@ -32,6 +32,18 @@ _active=contextvars.ContextVar('dnsalias_source_lifetimes',default={})
 class LifecycleBusy(RuntimeError):pass
 
 
+def process_command(pid, *, timeout=1):
+    """Read a FreeBSD process command, returning None only for a reaped PID."""
+    import subprocess
+    if type(pid) is not int or pid<=1:raise ValueError('recorded process identity required')
+    result=subprocess.run(['/bin/ps','-ww','-p',str(pid),'-o','command='],
+                          capture_output=True,text=True,timeout=timeout)
+    if result.returncode==1 and not result.stdout and not result.stderr:return None
+    if result.returncode!=0 or result.stderr or not result.stdout.strip() or len(result.stdout)>16384:
+        raise ValueError('prior process status unavailable; inspect before recovery')
+    return result.stdout.strip()
+
+
 def canonical(path):
     path=Path(path)
     if not path.is_absolute() or not re.fullmatch(r'/[A-Za-z0-9_./-]{1,511}',str(path)) or '..' in path.parts:

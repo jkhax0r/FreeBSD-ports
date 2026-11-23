@@ -407,18 +407,37 @@ class IndexedProofLedger(ProofLedger):
         valid_clock(now)
         return self._apply(None,now,policies=tuple(policies))
 
+    def _derive_for_edit(self, staged, now):
+        if self._parents:
+            return staged._derive(staged.proofs, self.anchors, now)
+        # Without CNAME edges, each lease has exactly one address proof.
+        # A policy edit can only remove existing roots and expired leases.
+        policies = {policy.name: policy for policy in staged.policies}
+        live_names = {proof.name for proof in staged.proofs.values()}
+        anchors = {(policy, name) for policy, name in self.anchors
+                   if name in live_names and policy in policies and policies[policy].matches(name)}
+        if len(anchors) > staged.max_leases:
+            raise OverflowError("alias root capacity exceeded")
+        leases = {key: lease for key, lease in self.leases.items()
+                  if lease.deadline > now and (lease.policy, lease.name) in anchors}
+        if len(leases) > staged.max_walk:
+            raise OverflowError("proof traversal budget exceeded")
+        if len(leases) > staged.max_leases:
+            raise OverflowError("derived lease capacity exceeded")
+        return anchors, leases
+
     def replace_policy_set(self,policies,now):
         """Configuration edit, retaining independent proofs and their deadlines.
 
         New policy identities learn from subsequent replies. Existing identities
         retain every still-valid, still-selected mapping. No TTL is renewed.
-        This occasional full derivation is never called on the DNS reply path.
+        This operation runs only when the saved policy set changes.
         """
         if self._notifying:raise RuntimeError('commit observers must not mutate the ledger')
         valid_clock(now)
         staged=ProofLedger(tuple(policies),self.max_proofs,self.max_leases,self.max_walk)
         staged.proofs={k:p for k,p in self.proofs.items() if p.deadline>now}
-        staged.anchors,staged.leases=staged._derive(staged.proofs,self.anchors,now)
+        staged.anchors, staged.leases = self._derive_for_edit(staged, now)
         before={name:set(values) for name,values in self._members.items()}
         after={p.name:set() for p in staged.policies}
         for lease in staged.leases.values():after[lease.policy].add(lease.address)

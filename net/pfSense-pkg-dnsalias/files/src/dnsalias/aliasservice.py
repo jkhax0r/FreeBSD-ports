@@ -18,7 +18,7 @@ from .leases import Policy
 from .pfapi import NativePFTables
 from .processwatch import ProcessLifetimeWatch
 from .reloadlock import SharedReloadLock,ReloadBusy
-from .lifecycle import current,guarded,Lifetime
+from .lifecycle import current,guarded,Lifetime,process_command
 
 ROOT=Path('/usr/local/libexec/dnsalias')
 DATA=Path('/var/db/dnsalias')
@@ -109,9 +109,9 @@ def process():
     try:pid=int((DATA/'alias-service.pid').read_text())
     except FileNotFoundError:return None
     if pid<=1:raise ValueError('invalid alias service PID')
-    p=subprocess.run(['/bin/ps','-ww','-p',str(pid),'-o','command='],capture_output=True,text=True,timeout=1)
-    if not p.stdout.strip():return None
-    if p.stdout.strip() not in ('/usr/local/bin/python3.11 -B -m dnsalias.aliasservice run',f'/usr/local/bin/python3.11 -B {ROOT}/dnsalias/lifecycle.py alias run'):raise ValueError('alias service PID was reused')
+    command=process_command(pid)
+    if command is None:return None
+    if command not in ('/usr/local/bin/python3.11 -B -m dnsalias.aliasservice run',f'/usr/local/bin/python3.11 -B {ROOT}/dnsalias/lifecycle.py alias run'):raise ValueError('alias service PID was reused')
     return pid
 
 

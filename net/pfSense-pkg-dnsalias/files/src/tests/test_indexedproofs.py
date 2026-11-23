@@ -15,6 +15,27 @@ class IndexedExistingBehaviorTests(fixtures.ProofTests):
 
 
 class IndexedProofDeltaTests(unittest.TestCase):
+    def test_replacement_walk_limit_preserves_original_direct_leases(self):
+        policy = Policy('sites', ('*.example.com',))
+        notices = []
+        ledger = IndexedProofLedger([policy], max_walk=2, before_commit=notices.append)
+        for i in range(3):
+            name = f'n{i}.example.com'
+            event = fixtures.answer(name, [fixtures.record(name, '192.0.2.1', 10+i, 'answer')])
+            ledger.observe_changes(event, 0, 1000)
+        before = ledger.snapshot(1, 1001)
+        notices.clear()
+        with self.assertRaisesRegex(OverflowError, 'traversal budget'):
+            ledger.replace_policy_set([policy, Policy('new', ('*.example.com',))], 1)
+        self.assertFalse(notices)
+        self.assertEqual(ledger.policies, (policy,))
+        self.assertEqual(ledger.snapshot(1, 1001), before)
+
+        ledger.replace_policy_set([policy, Policy('new', ('*.example.com',))], 10)
+        self.assertEqual(ledger.tables(10), {'sites': {'192.0.2.1'}, 'new': set()})
+        self.assertEqual(sorted(lease.deadline for lease in ledger.leases.values()), [11, 12])
+        self.assertEqual(ledger.tables(12), {'sites': set(), 'new': set()})
+
     def test_single_large_policy_matches_at_bound(self):
         patterns = tuple(
             ("*." if i % 2 else "") + f"group{i}.example.com"
