@@ -155,8 +155,21 @@ class FeedTelemetry:
             if store is not None:store.close()
 
     def close(self,wait_seconds=.2):
-        self.stop.set();self.thread.join(timeout=wait_seconds)
-        return not self.thread.is_alive()
+        self.stop.set()
+        self.thread.join(timeout=wait_seconds)
+        if self.thread.is_alive():
+            return False
+        # The feed owner stops collecting before close. Records still in the
+        # queue were never attempted, even if opening the database failed.
+        # An insert removed from the queue may have an unknown outcome.
+        while True:
+            try:
+                self.queue.get_nowait()
+            except queue.Empty:
+                break
+            self.losses['worker_unavailable'] += 1
+            self.counters['dropped'] += 1
+        return True
 
     def status(self):
         losses = dict(self.losses)

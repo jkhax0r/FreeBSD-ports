@@ -17,6 +17,7 @@ from .confirmation import ConfirmationAuthority
 from .confirmationpage import ConfirmationPage
 from .nativeasset import NativeConfirmationAsset,NativeKeyAsset
 from .replyendpoint import ReplyEndpoint
+from .replystartup import ReplyStartup
 from .processwatch import ProcessLifetimeWatch
 from .sourceaudit import SourceAudit,SourceSpec
 from .watchtransfer import send_source_watch,_file
@@ -140,11 +141,18 @@ class ConfirmationOwner:
         if type(sources) is not SourceAudit:raise ValueError('pinned source audit required')
         if expected_generation is not None and (type(expected_generation) is not str or not re.fullmatch('[a-f0-9]{32}',expected_generation)):
             raise ValueError('exact announced reader generation required')
+        # prepare_replacement retains the exited PID and retires its generation.
+        # The replacement can acknowledge its reload before its reader is ready.
+        wait_seconds = ReplyStartup.MAX_SECONDS
+        if (self.retired_generation is not None and self.producer_pid != producer_pid
+                and expected_generation is None):
+            wait_seconds = ReplyStartup.REPLACEMENT_SECONDS
         self.producer_pid=producer_pid;self.state='enrolling'
+        deadline=time.monotonic()+wait_seconds
         def enroll():
             try:
                 with ProcessLifetimeWatch(producer_pid) as watch:
-                    endpoint=self.directory/'reader/replies.sock';deadline=time.monotonic()+8
+                    endpoint=self.directory/'reader/replies.sock'
                     while not endpoint.exists():
                         if self.cancel.wait(.002) or not watch.alive() or time.monotonic()>=deadline:raise TimeoutError('reader did not enroll')
                     if identity(self.directory/'reader')!=self.identities['reader'] or not self.donor.healthy():raise ValueError('notice directory changed')

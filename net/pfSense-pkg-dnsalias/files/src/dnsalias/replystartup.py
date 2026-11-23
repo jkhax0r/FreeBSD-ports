@@ -21,10 +21,10 @@ from .replygate import clock
 class ReplyStartup:
     MAX_EVENTS=256
     MAX_BYTES=512*1024
-    # The actual 2.96M-entry pfBlockerNG dataset takes about4.1s to reload.
-    # Allow that controlled startup plus its independent post-load audit;
-    # queue/event/byte caps and original reply times remain unchanged.
     MAX_SECONDS=8.0
+    # A newly qualified replacement process may still be loading its policy.
+    # This is a service enrollment budget, independent of client DNS deadlines.
+    REPLACEMENT_SECONDS=15.0
     MAX_DATAGRAMS=64
     BUDGET_SECONDS=.002
 
@@ -34,8 +34,6 @@ class ReplyStartup:
         if not isinstance(expected,DeploymentFingerprint) or not isinstance(producer,ProducerIdentity):
             raise ValueError('qualified deployment and producer required')
         clock(load_open)
-        if not 0<=time.monotonic()-load_open<self.MAX_SECONDS:
-            raise ValueError('recent caller-controlled load window required')
         if retired_generation is not None and (not isinstance(retired_generation,GenerationEnrollment)
             or retired_generation.profile_id!=expected.identifier or retired_generation.producer.uid!=producer.uid
             or retired_generation.producer.boot_id!=producer.boot_id or retired_generation.load_close>load_open
@@ -49,6 +47,11 @@ class ReplyStartup:
         if type(discard_before_load) is not bool or discard_before_load and retired_generation is None:
             raise ValueError('pre-load discard requires an explicit retired generation')
         self.discard_before_load=discard_before_load
+        self.wait_seconds = self.MAX_SECONDS
+        if discard_before_load and retired_generation.producer.pid != producer.pid:
+            self.wait_seconds = self.REPLACEMENT_SECONDS
+        if not 0 <= time.monotonic()-load_open < self.wait_seconds:
+            raise ValueError('recent caller-controlled load window required')
         self.endpoint,self.expected,self.producer=endpoint,expected,producer
         self.load_open=load_open;self.last_poll=load_open
         self.assembler=MessageAssembler();self.queue=deque();self.bytes=0
@@ -63,7 +66,7 @@ class ReplyStartup:
         if self.state!='collecting':return False
         try:
             clock(now)
-            if now<self.last_poll or not 0<=now-self.load_open<self.MAX_SECONDS:
+            if now<self.last_poll or not 0<=now-self.load_open<self.wait_seconds:
                 self._fail('startup_clock_or_deadline');return False
             self.last_poll=now
             if not self.endpoint.healthy():
@@ -173,5 +176,5 @@ class ReplyStartup:
     def status(self):
         return {'state':self.state,'reason':self.reason,'queued_replies':len(self.queue),'queued_bytes':self.bytes,
             'counters':dict(self.counters),'generation_seen':self.enrollment is not None,
-            'limits':{'events':self.MAX_EVENTS,'bytes':self.MAX_BYTES,'seconds':self.MAX_SECONDS},
+            'limits':{'events':self.MAX_EVENTS,'bytes':self.MAX_BYTES,'seconds':self.wait_seconds},
             'enforcement_applied':False}

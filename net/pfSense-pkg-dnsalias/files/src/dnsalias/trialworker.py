@@ -18,10 +18,15 @@ from .dnscheck import _question,query
 from .sourceaudit import SourceAudit,SourceSpec,_path
 
 
-def await_control(control,resolver,*,budget_seconds=8):
+def await_control(control,resolver,*,budget_seconds=8,replacement_reload=False):
     """Read-only readiness wait; never repeat a reload or accept another PID."""
     from .runtimecontrol import RuntimeControlError,status_value
-    if type(budget_seconds) not in (int,float) or not 0<budget_seconds<=8:raise ValueError('bounded readiness budget required')
+    if type(replacement_reload) is not bool:raise ValueError('explicit replacement reload mode required')
+    limit=8
+    if replacement_reload:
+        from .replystartup import ReplyStartup
+        limit=ReplyStartup.REPLACEMENT_SECONDS
+    if type(budget_seconds) not in (int,float) or not 0<budget_seconds<=limit:raise ValueError('bounded readiness budget required')
     started=time.monotonic();deadline=started+budget_seconds;attempts=0
     while resolver.alive():
         remaining=deadline-time.monotonic()

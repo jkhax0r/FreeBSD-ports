@@ -131,3 +131,57 @@ class ReplyExclusions(unittest.TestCase):
         self.assertEqual(store.waits, ['PRAGMA busy_timeout=250', 'PRAGMA busy_timeout=100'])
         self.assertEqual(feed.status()['persisted'], 65)
         self.assertEqual(feed.status()['dropped'], 0)
+
+    def test_stop_counts_queued_records_when_database_never_opened(self):
+        entered, release = Event(), Event()
+
+        def busy(*args, **kwargs):
+            entered.set()
+            if not release.wait(2):
+                raise RuntimeError('fixture did not release database open')
+            error = sqlite3.OperationalError('busy')
+            error.sqlite_errorcode = sqlite3.SQLITE_BUSY
+            raise error
+
+        with patch('dnsalias.trialfeed.EventStore', side_effect=busy):
+            feed = FeedTelemetry('unused', 'session', '1' * 64)
+            try:
+                self.assertTrue(entered.wait(2))
+                feed.offer([{}, {}])
+                self.assertFalse(feed.close(0))
+                self.assertEqual(feed.status()['queued'], 2)
+            finally:
+                release.set()
+                self.assertTrue(feed.close(1))
+        report = feed.status()
+        self.assertEqual((report['offered'], report['persisted'], report['queued']), (2, 0, 0))
+        self.assertEqual(report['dropped_by_reason'], {'queue_full': 0, 'worker_unavailable': 2, 'database_busy': 0})
+        self.assertTrue(feed.close(0))
+        self.assertEqual(feed.status(), report)
+
+    def test_uncertain_insert_is_separate_from_unattempted_records(self):
+        entered, release = Event(), Event()
+
+        class FailedStorage(Storage):
+            def insert(self, items):
+                entered.set()
+                if not release.wait(2):
+                    raise RuntimeError('fixture did not release insert')
+                raise OSError('write outcome unknown')
+
+        item = {'ack': {'status': 'ignored'}, 'reason': 'unsupported_reply',
+                'ack_transport': 'queued', 'observation': {'client': '192.0.2.1'}}
+        with patch('dnsalias.trialfeed.EventStore', return_value=FailedStorage()), \
+             patch('dnsalias.trialfeed.summarize', return_value={}), \
+             patch('dnsalias.trialfeed.describe', return_value={}):
+            feed = FeedTelemetry('unused', 'session', '1' * 64)
+            try:
+                feed.offer([item])
+                self.assertTrue(entered.wait(2))
+                feed.offer([item, item])
+            finally:
+                release.set()
+                self.assertTrue(feed.close(1))
+        report = feed.status()
+        self.assertEqual(report['error'], 'OSError')
+        self.assertEqual((report['offered'], report['persisted'], report['dropped'], report['queued']), (3, 0, 2, 0))

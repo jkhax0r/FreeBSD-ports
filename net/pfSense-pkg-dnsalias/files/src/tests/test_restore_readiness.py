@@ -2,7 +2,8 @@
 import unittest
 from unittest.mock import Mock, patch
 
-from dnsalias.trialworker import match_baseline
+from dnsalias.trialworker import await_control, match_baseline
+from dnsalias.runtimecontrol import RuntimeControlError
 
 
 class RestoreReadiness(unittest.TestCase):
@@ -15,6 +16,41 @@ class RestoreReadiness(unittest.TestCase):
 
     def advance(self, seconds):
         self.now += seconds
+
+    def control_after(self, delay, *, returned_pid=10, **options):
+        self.watch.pid = 10
+        control = Mock()
+
+        def read(command, deadline):
+            if self.now < delay:
+                self.now = deadline
+                raise RuntimeControlError('connection timed out') from TimeoutError()
+            return b'ready'
+
+        control._read.side_effect = read
+        with patch('dnsalias.trialworker.time.monotonic', side_effect=lambda: self.now), \
+             patch('dnsalias.trialworker.time.sleep', side_effect=self.advance), \
+             patch('dnsalias.runtimecontrol.status_value', return_value={'pid': returned_pid}):
+            return await_control(control, self.watch, **options)
+
+    def test_replacement_can_finish_a_slow_reload(self):
+        result = self.control_after(9.6, budget_seconds=15, replacement_reload=True)
+        self.assertTrue(result['ready'])
+        self.assertGreaterEqual(result['elapsed_seconds'], 9.6)
+        self.assertLess(result['elapsed_seconds'], 15)
+
+    def test_normal_and_replacement_deadlines_and_identity(self):
+        with self.assertRaises(ValueError):
+            self.control_after(0, budget_seconds=9)
+        with self.assertRaises(TimeoutError):
+            self.control_after(20)
+        self.assertEqual(self.now, 8)
+        self.now = 0
+        with self.assertRaises(TimeoutError):
+            self.control_after(20, budget_seconds=15, replacement_reload=True)
+        self.assertEqual(self.now, 15)
+        with self.assertRaises(ValueError):
+            self.control_after(0, returned_pid=11, budget_seconds=15, replacement_reload=True)
 
     def match(self, query, **options):
         with patch('dnsalias.trialworker.time.monotonic', side_effect=lambda: self.now), \

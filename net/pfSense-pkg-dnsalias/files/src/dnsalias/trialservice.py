@@ -54,7 +54,8 @@ class _EnrollmentProbe:
         if type(reload_before_query) is not bool:raise ValueError('explicit controlled-reload choice required')
         self.reload_before_query=reload_before_query
         self.pid=target['resolver_pid'];self.port=target['dns_port'];self.probe=dict(target['probes'][0])
-        self.control=control;self.deadline=load_open+ReplyStartup.MAX_SECONDS
+        self.control=control
+        self.deadline=load_open+(ReplyStartup.REPLACEMENT_SECONDS if reload_before_query else ReplyStartup.MAX_SECONDS)
         self.cancelled=threading.Event();self.observed=threading.Event()
         self.result={'state':'pending','queries_issued':0,'answers_received':0,'error':None}
         self.thread=threading.Thread(target=self._run,name='dnsalias-startup-probe',daemon=True)
@@ -71,14 +72,19 @@ class _EnrollmentProbe:
                 if self.cancelled.is_set():result['state']='cancelled';return
                 remaining=self.deadline-time.monotonic()
                 if remaining<=0:raise TimeoutError('existing startup deadline expired')
-                await_control(self.control,CancelWatch(),budget_seconds=min(8,remaining))
+                result['stage']='initial_control'
+                result['initial_readiness']=await_control(self.control,CancelWatch(),budget_seconds=min(8,remaining))
                 if self.reload_before_query:
                     from .reloadrequest import ReloadRequest
                     if self.cancelled.is_set():result['state']='cancelled';return
+                    result['stage']='sending_reload'
                     result['reload']=ReloadRequest(self.control,watch).send()
+                    result['stage']='replacement_control'
                     remaining=self.deadline-time.monotonic()
                     if remaining<=0:raise TimeoutError('replacement reload readiness deadline')
-                    await_control(self.control,CancelWatch(),budget_seconds=min(8,remaining))
+                    result['replacement_readiness']=await_control(self.control,CancelWatch(),
+                        budget_seconds=remaining,replacement_reload=True)
+                result['stage']='loopback_probe'
                 for _ in range(4):
                     remaining=self.deadline-time.monotonic()
                     if self.cancelled.is_set() or self.observed.is_set() or remaining<=0:break
