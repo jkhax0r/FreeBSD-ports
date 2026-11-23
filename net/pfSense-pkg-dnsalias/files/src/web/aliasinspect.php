@@ -11,13 +11,36 @@ function da_alias_popup_payload(string $name,array $policies,array $service,int 
         'state'=>da_alias_row_status($policy,$service,$health),'current'=>$count!==null,'member_count'=>$count,
         'members'=>array_slice(array_keys($members),0,32),'observed_utc'=>$count!==null?$service['membership_observed_utc']:null];
 }
+function da_alias_check_pattern($pattern): void {
+    if(!is_string($pattern)||strlen($pattern)>255||!preg_match('/^(?:\*\.)?[a-z0-9_-]+(?:\.[a-z0-9_-]+)*$/D',$pattern))
+        throw new InvalidArgumentException('Invalid saved DNS pattern');
+}
+function da_alias_report_patterns(array $patterns): array {
+    if(count($patterns)<128||count($patterns)>2048||!array_is_list($patterns))return $patterns;
+    $wildcards=[];
+    foreach($patterns as $pattern){
+        da_alias_check_pattern($pattern);
+        if(str_starts_with($pattern,'*.'))$wildcards[substr($pattern,1)]=true;
+    }
+    if(!$wildcards)return $patterns;
+    // An ancestor wildcard covers every strict subdomain, including another
+    // wildcard below it. An exact apex remains independently matchable.
+    $kept=[];
+    foreach($patterns as $pattern){
+        $base=str_starts_with($pattern,'*.')?substr($pattern,2):$pattern;
+        for($dot=strpos($base,'.');$dot!==false;$dot=strpos($base,'.',$dot+1)){
+            if(isset($wildcards[substr($base,$dot)]))continue 2;
+        }
+        $kept[]=$pattern;
+    }
+    return $kept;
+}
 function da_alias_pattern_sql(array $patterns,string $field,array &$params): string {
     if(!in_array($field,['domain','query'],true)||!array_is_list($patterns)||count($patterns)<1||count($patterns)>2048)
         throw new InvalidArgumentException('Bounded saved DNS patterns required');
     $exact=[];$suffixes=[];
     foreach($patterns as $pattern){
-        if(!is_string($pattern)||strlen($pattern)>255||!preg_match('/^(?:\*\.)?[a-z0-9_-]+(?:\.[a-z0-9_-]+)*$/D',$pattern))
-            throw new InvalidArgumentException('Invalid saved DNS pattern');
+        da_alias_check_pattern($pattern);
         if(str_starts_with($pattern,'*.')){
             $suffix=substr($pattern,1);
             $suffixes[strlen($suffix)][]=$suffix;
@@ -38,6 +61,43 @@ function da_alias_pattern_sql(array $patterns,string $field,array &$params): str
     }
     return '('.implode(' OR ',$parts).')';
 }
+// For long pattern lists, match each distinct recorded domain at most once.
+// Bound both the name count and the memory used for this per-request projection.
+function da_alias_observed_matches(SQLite3 $db,array $patterns,string $dns_scope,array $window): ?string {
+    $recent=false;
+    if(isset($window[':since'],$window[':until']) &&
+        $db->querySingle("SELECT 1 FROM sqlite_master WHERE type='index' AND name='event_time'")){
+        $recent=!da_rows($db,"SELECT 1 FROM events WHERE time BETWEEN :since AND :until LIMIT 1 OFFSET 1024",$window);
+    }
+    $range=$recent?' AND time BETWEEN :since AND :until':'';
+    $sql="WITH sampled AS (
+        SELECT DISTINCT domain FROM events WHERE $dns_scope AND domain IS NOT NULL $range LIMIT 8193
+    ), observed AS MATERIALIZED (
+        SELECT CASE WHEN typeof(domain)='text' AND length(CAST(domain AS BLOB))<=253 THEN domain END AS name FROM sampled
+    ) SELECT CASE WHEN count(*)<=8192 AND count(*)=count(name)
+        AND coalesce(sum(length(CAST(name AS BLOB))),0)<=1048576
+        THEN (SELECT json_group_array(name) FROM observed) END AS names FROM observed";
+    $serialized=da_rows($db,$sql,$recent?$window:[])[0]['names'];
+    if($serialized===null)return null;
+    $names=json_decode($serialized,true);
+    if(!is_array($names))return null;
+    $exact=[];$suffix=[];
+    foreach($patterns as $pattern){
+        if(str_starts_with($pattern,'*.'))$suffix[substr($pattern,1)]=true;
+        else $exact[$pattern]=true;
+    }
+    $matches=[];
+    foreach($names as $name){
+        // Older or malformed rows keep the original SQLite comparison semantics.
+        if(!is_string($name)||strlen($name)>253 || !preg_match('/^[a-z0-9_-]+(?:\.[a-z0-9_-]+)*$/D',$name))return null;
+        if(isset($exact[$name])){$matches[]=$name;continue;}
+        for($dot=strpos($name,'.');$dot!==false;$dot=strpos($name,'.',$dot+1)){
+            if(isset($suffix[substr($name,$dot)])){$matches[]=$name;break;}
+        }
+    }
+    return json_encode($matches,JSON_THROW_ON_ERROR);
+}
+
 function da_alias_domain_filter(SQLite3 $db,array $patterns,string $dns_scope,array &$params): string {
     $bindings=[];
     $predicate=da_alias_pattern_sql($patterns,'domain',$bindings);
@@ -47,6 +107,15 @@ function da_alias_domain_filter(SQLite3 $db,array $patterns,string $dns_scope,ar
         // A large history or an older schema keeps the ordinary event query.
         if(SQLite3::version()['versionNumber']>=3035000 &&
             $db->querySingle("SELECT 1 FROM sqlite_master WHERE type='index' AND name='event_domain_evidence'")){
+            if(count($patterns)>=128){
+                $names=da_alias_observed_matches($db,$patterns,$dns_scope,$params);
+                if($names!==null){
+                    $params[':observed_domains']=$names;
+                    return 'domain IN (SELECT value FROM json_each(:observed_domains))';
+                }
+                $params+=$bindings;
+                return $predicate;
+            }
             $sql="WITH observed AS MATERIALIZED (
                 SELECT DISTINCT domain FROM events WHERE $dns_scope AND domain IS NOT NULL LIMIT 513
             ) SELECT CASE WHEN count(*)<=512 AND coalesce(sum(length(CAST(domain AS BLOB))),0)<=131072
@@ -91,11 +160,12 @@ function da_alias_members_model(string $directory,array $policy,array $service,i
         $path=$directory.'/events.sqlite';
         if(is_link($path)||!is_file($path)||filesize($path)>67108864)throw new RuntimeException('Telemetry unavailable');
         $db=new SQLite3($path,SQLITE3_OPEN_READONLY);$db->enableExceptions(true);$db->busyTimeout(250);
+        $patterns=da_alias_report_patterns($policy['names']);
         // Retention may run between name discovery and the domain totals.
         $db->exec('BEGIN');
         $params=[':since'=>$now-$v['window']*60,':until'=>$now];
         $dns_scope="kind IN ('dns_query','dns_reply_log','dns_policy_log','dns_reply')";
-        $where=da_alias_domain_filter($db,$policy['names'],$dns_scope,$params);
+        $where=da_alias_domain_filter($db,$patterns,$dns_scope,$params);
         // Match the EventStore partial index predicate so exact names can seek by domain and time.
         $v['domains']=da_rows($db,"SELECT domain,sum(kind='dns_query') AS queries,sum(kind='dns_reply') AS replies,sum(kind='dns_reply_log') AS reply_logs,sum(kind='dns_policy_log') AS policy_logs,max(time) AS latest FROM events WHERE $dns_scope AND time>=:since AND time<=:until AND $where GROUP BY domain ORDER BY replies DESC,queries DESC,domain LIMIT 101",$params);
         $db->exec('COMMIT');
@@ -107,7 +177,7 @@ function da_alias_members_model(string $directory,array $policy,array $service,i
             foreach(da_alias_packet_counts($db,$list,$ips) as $r)$v['packets'][$r['ip']]=$r;
             $v['answer_history_available']=(int)$db->querySingle("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='reply_answers'")===1;
             if($v['answer_history_available']){
-                $matching=da_alias_pattern_sql($policy['names'],'query',$ips);
+                $matching=da_alias_pattern_sql($patterns,'query',$ips);
                 $v['answers']=da_rows($db,"SELECT query,value,count(*) AS records,max(time) AS latest,max(expires_utc) AS expiry FROM reply_answers WHERE rrtype IN ('A','AAAA') AND time>=:since AND time<=:until AND value IN ($list) AND $matching GROUP BY query,value ORDER BY latest DESC,query,value LIMIT 501",$ips);
             }
         }

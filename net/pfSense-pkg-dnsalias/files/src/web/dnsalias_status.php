@@ -1,6 +1,8 @@
 <?php
 /* DNS Alias statistics and separately prepared, scoped trial controls. */
+$da_time_start=hrtime(true);
 require_once("guiconfig.inc");
+$da_time_authenticated=hrtime(true);
 // guiconfig authenticates and checks the requesting user's page privileges.
 // No telemetry is opened before that check. No anonymous JSON endpoint exists.
 require_once("/usr/local/libexec/dnsalias/web/lifecycle.php");
@@ -81,7 +83,9 @@ try {
         header('Location: dnsalias_status.php?view=aliases'.($_POST['alias_op']==='settings'?'&settings=1':''),true,303);exit;
     }
 }catch(Throwable $e){$da_alias_error=$e->getMessage();}
+$da_alias_ns=0;
 if(($_GET['view']??'')==='aliases'){
+    $da_alias_start=hrtime(true);
     try{
         $da_aliases=dnsalias_policies_read();
         // Only the list and members view display live PF membership.
@@ -90,6 +94,7 @@ if(($_GET['view']??'')==='aliases'){
             $da_service=da_alias_display_status($da_aliases,$selected);
         }
     }catch(Throwable $e){if($da_alias_error==='')$da_alias_error=$e->getMessage();}
+    $da_alias_ns=hrtime(true)-$da_alias_start;
 }
 try {
     $da_request=da_trial_request('status');
@@ -113,7 +118,9 @@ try {
     $da_trial_error='Trial control unavailable or request refused. Refresh status before retrying; do not assume an unconfirmed request failed.';
 }
 $pgtitle = array(gettext("Status"), gettext("DNS Alias"));
+$da_report_start=hrtime(true);
 $da_view = da_load('/var/db/dnsalias', $_GET, time());
+$da_report_end=hrtime(true);
 if($da_view['view']==='domain' && $da_view['domain']!==''){
     // guiconfig has already loaded config.xml. Reuse that in-memory snapshot;
     // no service subprocess, PF read, DNS lookup or background polling.
@@ -134,6 +141,13 @@ if($da_view['view']==='aliases'&&is_string($_GET['inspect_members']??null)){
 $da_view['identity_pending']=($da_view['client']!=='' || in_array($da_view['view'],['overview','clients','client','domain','ip'],true)) && !$da_view['errors'] && da_queue_identity('/var/db/dnsalias',$da_view['status'],time());
 $da_fragment=$_SERVER['HTTP_X_DNSALIAS_FRAGMENT']??'';
 $da_client_fragment=($_SERVER['REQUEST_METHOD']??'GET')==='GET' && $da_view['view']==='client' && in_array($da_fragment,['client','client-v2'],true);
+// Expose pre-render timing only on the authenticated report. Values are
+// elapsed milliseconds and contain no addresses, filters or saved names.
+if (($_SERVER['REQUEST_METHOD']??'GET')==='GET' && !headers_sent()) {
+    header(sprintf('Server-Timing: da_gui;dur=%.2F, da_setup;dur=%.2F, da_alias;dur=%.2F, da_report;dur=%.2F, da_details;dur=%.2F',
+        ($da_time_authenticated-$da_time_start)/1e6,($da_report_start-$da_time_authenticated-$da_alias_ns)/1e6,
+        $da_alias_ns/1e6,($da_report_end-$da_report_start)/1e6,(hrtime(true)-$da_report_end)/1e6),false);
+}
 if($da_client_fragment){
     header('Content-Type: text/html; charset=utf-8');header('Cache-Control: no-store');
     da_render($da_view,$da_fragment);exit;
