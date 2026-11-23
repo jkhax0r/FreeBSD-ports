@@ -15,17 +15,8 @@ function da_reply_health(array $status,float $now,string $availability='reported
     foreach(['offered','persisted','dropped','invalid','queued'] as $key){
         $value=$telemetry[$key]??null;$counts[$key]=is_int($value)&&$value>=0?$value:null;
     }
-    $excluded=$telemetry['excluded_by_reason']??null;
-    $reasons=null;
-    if(is_array($excluded)){
-        $reasons=[];
-        foreach(['request_deadline','helper_outcome','reply_metadata'] as $key){
-            $value=$excluded[$key]??null;
-            if(!is_int($value)||$value<0){$reasons=null;break;}
-            $reasons[$key]=$value;
-        }
-        if($reasons!==null && array_sum($reasons)!==$counts['invalid'])$reasons=null;
-    }
+    $reasons=da_reply_reason_counts($telemetry['excluded_by_reason']??null,['request_deadline','helper_outcome','reply_metadata'],$counts['invalid']);
+    $drops=da_reply_reason_counts($telemetry['dropped_by_reason']??null,['queue_full','worker_unavailable','database_busy'],$counts['dropped']);
     $loss=$status['reply_loss']['dropped']??null;
     $counts['resolver_loss']=is_int($loss)&&$loss>=0?$loss:null;
     $warning=null;
@@ -42,7 +33,17 @@ function da_reply_health(array $status,float $now,string $availability='reported
         elseif(($counts['dropped']??0)>0||($counts['invalid']??0)>0)$warning='Some DNS reply observations were dropped or excluded from trusted statistics. See the feed counters in Coverage.';
     }else $label=match($state){'stopped'=>'Reply feed reports stopped','starting'=>'Reply feed reports starting','stopping'=>'Reply feed reports stopping',default=>'Reply feed not reporting running'};
     return ['label'=>$label,'warning'=>$warning,'observed'=>$valid?$stamp:null,'fresh'=>$fresh,'reported_running'=>$running,
-        'storage_reported_active'=>$storage,'error'=>$error,'counts'=>$counts,'excluded_by_reason'=>$reasons];
+        'storage_reported_active'=>$storage,'error'=>$error,'counts'=>$counts,'excluded_by_reason'=>$reasons,'dropped_by_reason'=>$drops];
+}
+function da_reply_reason_counts($values,array $keys,?int $total): ?array {
+    if(!is_array($values)||$total===null)return null;
+    $counts=[];
+    foreach($keys as $key){
+        $value=$values[$key]??null;
+        if(!is_int($value)||$value<0)return null;
+        $counts[$key]=$value;
+    }
+    return array_sum($counts)===$total?$counts:null;
 }
 function da_reply_health_read(string $directory,float $now): array {
     $path=$directory.'/alias-status.json';clearstatcache(true,$path);clearstatcache(true,$directory);$before=@lstat($path);
@@ -68,6 +69,11 @@ function da_reply_health_render(array $health): void {
     echo '<div class="da-panel" id="da-reply-health"><div class="da-panel-title"><h2>DNS reply feed and storage</h2><span class="da-pill da-neutral">'.da_h($health['label']).'</span></div>';
     $c=$health['counts'];
     da_table(['Reported offered','Confirmed stored','Storage drops','Excluded / unqualified','Queued','Resolver-reported misses'],[[da_num($c['offered']),da_num($c['persisted']),da_num($c['dropped']),da_num($c['invalid']),da_num($c['queued']),da_num($c['resolver_loss'])]]);
+    $drops=$health['dropped_by_reason']??null;
+    if(is_array($drops)&&($c['dropped']??0)>0){
+        da_table(['Statistics queue full','Storage worker unavailable','Database busy'],[[
+            da_num($drops['queue_full']),da_num($drops['worker_unavailable']),da_num($drops['database_busy'])]]);
+    }
     $reasons=$health['excluded_by_reason']??null;
     if(is_array($reasons)&&($c['invalid']??0)>0){
         da_table(['Helper deadline expired','Other helper refusal','Invalid reply metadata'],[[

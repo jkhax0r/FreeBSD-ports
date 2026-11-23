@@ -1,5 +1,7 @@
 """Excluded reply reasons must describe off-path observations without inventing a DNS or firewall result."""
 import unittest
+import queue
+import sqlite3
 from threading import Event
 from unittest.mock import patch
 
@@ -54,3 +56,78 @@ class ReplyExclusions(unittest.TestCase):
         self.assertFalse(report['dns_waits_for_storage'])
         report['excluded_by_reason']['reply_metadata'] = 42
         self.assertEqual(feed.status()['invalid'], 3)
+
+    def test_refused_offers_and_rolled_back_writes_have_distinct_counts(self):
+        class BusyStorage(Storage):
+            in_transaction = False
+            def __init__(self):
+                super().__init__()
+                self.db = self
+            def execute(self, sql):
+                self.last_statement = sql
+            def insert(self, items):
+                self.written.set()
+                error = sqlite3.OperationalError('busy')
+                error.sqlite_errorcode = sqlite3.SQLITE_BUSY
+                raise error
+
+        item = {'ack': {'status': 'ignored'}, 'reason': 'unsupported_reply',
+                'ack_transport': 'queued', 'observation': {'client': '192.0.2.1'}}
+        store = BusyStorage()
+        with patch('dnsalias.trialfeed.EventStore', return_value=store), \
+             patch('dnsalias.trialfeed.summarize', return_value={}), \
+             patch('dnsalias.trialfeed.describe', return_value={}):
+            feed = FeedTelemetry('unused', 'session', '1' * 64)
+            try:
+                with patch.object(feed.queue, 'put_nowait', side_effect=queue.Full):
+                    feed.offer([item])
+                feed.offer([item, item])
+                self.assertTrue(store.written.wait(2))
+            finally:
+                self.assertTrue(feed.close(1))
+            feed.offer([item])
+        report = feed.status()
+        self.assertEqual(report['dropped_by_reason'], {'queue_full': 1, 'worker_unavailable': 1, 'database_busy': 2})
+        self.assertEqual((report['offered'], report['persisted'], report['dropped'], report['busy_batches']), (4, 0, 4, 1))
+        self.assertIsNone(report['error'])
+        self.assertEqual(feed.counters['dropped'], report['dropped'])
+        self.assertEqual(store.last_statement, 'PRAGMA busy_timeout=250')
+        report['dropped_by_reason']['database_busy'] = 0
+        self.assertEqual(feed.status()['dropped'], 4)
+
+    def test_stop_shortens_only_the_private_storage_wait_before_draining(self):
+        class PausedStorage(Storage):
+            def __init__(self):
+                super().__init__()
+                self.db = self
+                self.waits = []
+                self.proceed = Event()
+            def execute(self, sql):
+                self.waits.append(sql)
+            def insert(self, items):
+                if not self.saved:
+                    self.written.set()
+                    if not self.proceed.wait(2):
+                        raise RuntimeError('test did not release the first insert')
+                self.saved.extend(items)
+                return len(items)
+
+        item = {'ack': {'status': 'ignored'}, 'reason': 'unsupported_reply',
+                'ack_transport': 'queued', 'observation': {'client': '192.0.2.1'}}
+        store = PausedStorage()
+        with patch('dnsalias.trialfeed.EventStore', return_value=store), \
+             patch('dnsalias.trialfeed.summarize', return_value={}), \
+             patch('dnsalias.trialfeed.describe', return_value={}):
+            feed = FeedTelemetry('unused', 'session', '1' * 64)
+            try:
+                feed.offer([item])
+                self.assertTrue(store.written.wait(2))
+                self.assertEqual(store.waits, ['PRAGMA busy_timeout=250'])
+                feed.offer([item] * 64)
+                self.assertFalse(feed.close(0))
+            finally:
+                store.proceed.set()
+                self.assertTrue(feed.close(1))
+        self.assertEqual(store.waits, ['PRAGMA busy_timeout=250', 'PRAGMA busy_timeout=100'])
+        self.assertEqual(feed.status()['persisted'], 65)
+        self.assertEqual(feed.status()['dropped'], 0)

@@ -52,6 +52,7 @@ class FeedTelemetry:
         self.detail_profile=ReplyProfile('1.26.1',profile_id,excluded_addresses)
         self.queue=queue.Queue(maxsize=128);self.stop=threading.Event()
         self.counters={'offered':0,'persisted':0,'dropped':0,'busy_batches':0}
+        self.losses = {'queue_full': 0, 'worker_unavailable': 0, 'database_busy': 0}
         self.exclusions={'request_deadline':0,'helper_outcome':0,'reply_metadata':0}
         self.error=None
         self.thread=threading.Thread(target=self._run,name='dnsalias-feed-statistics',daemon=True)
@@ -61,11 +62,15 @@ class FeedTelemetry:
         for item in outcomes:
             self.counters['offered']+=1
             if self.stop.is_set() or self.error is not None:
-                self.counters['dropped']+=1;continue
+                self.losses['worker_unavailable'] += 1
+                self.counters['dropped'] += 1
+                continue
             # Source observations have a 60KB receiver bound. 128 outstanding
             # records therefore remain below 8MB even before compacting.
             try:self.queue.put_nowait(item)
-            except queue.Full:self.counters['dropped']+=1
+            except queue.Full:
+                self.losses['queue_full'] += 1
+                self.counters['dropped'] += 1
 
     def _batch(self,first):
         # This wait belongs only to the statistics thread, after DNS ACKs.
@@ -90,12 +95,14 @@ class FeedTelemetry:
                     # This is the independent storage thread, after DNS ACK
                     # processing. Absorb ordinary short collector transactions
                     # without making the DNS producer wait or growing its queue.
-                    if hasattr(store,'db'):store.db.execute('PRAGMA busy_timeout=100')
+                    if hasattr(store, 'db'):
+                        store.db.execute('PRAGMA busy_timeout=250')
                     break
                 except sqlite3.OperationalError as exc:
                     if getattr(exc,'sqlite_errorcode',0)&255 not in (sqlite3.SQLITE_BUSY,sqlite3.SQLITE_LOCKED):raise
                     self.counters['busy_batches']+=1;self.stop.wait(.25)
             if store is None:return
+            draining = False
             while not self.stop.is_set() or not self.queue.empty():
                 try:first=self.queue.get(timeout=.1)
                 except queue.Empty:continue
@@ -123,10 +130,15 @@ class FeedTelemetry:
                             table_ack_transport=item['ack_transport'],
                             enforcement_applied=False if self.table_use=='unreferenced' else None,
                             table_use=self.table_use,firewall_decision_observed=False,
-                            mapping_coverage_incomplete=deferred or bool(self.counters['dropped']))
+                            mapping_coverage_incomplete=deferred or any(self.losses.values()))
                         events.append(event)
                     except (KeyError,ValueError,TypeError):self.exclusions['reply_metadata']+=1
                 if events:
+                    # Bound the time spent draining queued batches after service Stop.
+                    if not draining and self.stop.is_set():
+                        if hasattr(store, 'db'):
+                            store.db.execute('PRAGMA busy_timeout=100')
+                        draining = True
                     try:self.counters['persisted']+=store.insert(events)
                     except sqlite3.OperationalError as exc:
                         code=getattr(exc,'sqlite_errorcode',0)&255
@@ -134,7 +146,9 @@ class FeedTelemetry:
                         # EventStore's transaction context has rolled back.
                         # Drop this batch once, never replay an uncertain write.
                         # Fresh later observations can proceed after contention.
-                        self.counters['dropped']+=len(events);self.counters['busy_batches']+=1
+                        self.losses['database_busy'] += len(events)
+                        self.counters['dropped'] += len(events)
+                        self.counters['busy_batches'] += 1
         except Exception as exc:
             self.error=type(exc).__name__
         finally:
@@ -145,8 +159,9 @@ class FeedTelemetry:
         return not self.thread.is_alive()
 
     def status(self):
+        losses = dict(self.losses)
         excluded=dict(self.exclusions)
-        return dict(self.counters)|{'invalid':sum(excluded.values()),'excluded_by_reason':excluded,
+        return dict(self.counters)|{'dropped':sum(losses.values()),'dropped_by_reason':losses,'invalid':sum(excluded.values()),'excluded_by_reason':excluded,
             'error':self.error,'queued':self.queue.qsize(),
             'thread_alive':self.thread.is_alive(),'dns_waits_for_storage':False}
 
