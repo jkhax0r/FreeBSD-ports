@@ -170,13 +170,21 @@ function da_labels_snapshot(string $data,array $domains=[]): array {
         $db->exec('COMMIT');return $out;
     }finally{if($db!==null)$db->close();flock($lock,LOCK_UN);fclose($lock);}
 }
-function da_labels_attach(SQLite3 $events,string $data): bool {
+function da_labels_attach(SQLite3|PDO $events,string $data): bool {
     $layout=da_labels_layout($data);if($layout===null)return false;
     $lock=da_labels_lock($layout,LOCK_SH);$db=null;
     try{
         $db=da_labels_open($layout);$db->close();$db=null;
         $events->exec('PRAGMA query_only=ON');$p=$events->prepare('ATTACH DATABASE :path AS da_labels');
-        $p->bindValue(':path',$layout['database'],SQLITE3_TEXT);$p->execute()->finalize();$p->close();return true;
+        if ($events instanceof PDO) {
+            $p->bindValue(':path',$layout['database'],PDO::PARAM_STR);
+            $p->execute();
+        } else {
+            $p->bindValue(':path',$layout['database'],SQLITE3_TEXT);
+            $p->execute()->finalize();
+            $p->close();
+        }
+        return true;
     }finally{if($db!==null)$db->close();flock($lock,LOCK_UN);fclose($lock);}
 }
 function da_labels_query(array $query): array {

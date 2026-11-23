@@ -26,7 +26,7 @@ function da_destination_load($db, &$v) {
     foreach ($ips as $i=>$ip) { $slots[]=':ip'.$i;$params[':ip'.$i]=$ip; }
     $list=implode(',',$slots);
     $source="SELECT json_extract(body,'$.logged_answer') AS ip,domain AS name,time,client FROM events WHERE kind='dns_reply_log' AND json_extract(body,'$.logged_answer') IN ($list) AND time>=:since AND time<=:until";
-    if ((int)$db->querySingle("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='reply_answers'")===1) {
+    if ((bool)da_rows($db,"SELECT 1 FROM sqlite_master WHERE type='table' AND name='reply_answers'",[])) {
         $source.=" UNION ALL SELECT value AS ip,query AS name,time,client FROM reply_answers WHERE value IN ($list) AND rrtype IN ('A','AAAA') AND time>=:since AND time<=:until";
     }
     $valid="length(name) BETWEEN 1 AND 253 AND name NOT GLOB '*[^a-z0-9_.-]*' AND substr(name,1,1) GLOB '[a-z0-9_]' AND substr(name,-1,1) GLOB '[a-z0-9_]'";

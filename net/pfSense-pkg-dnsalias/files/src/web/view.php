@@ -37,7 +37,34 @@ function da_when($value) {
 function da_number($value) {
     return is_numeric($value) ? number_format((float)$value, 0) : 'Unknown';
 }
+// PDO SQLite fetches a prepared aggregate without executing its first step
+// twice. Use a read-only connection for the whole view and its transaction.
+function da_event_reader(string $path) {
+    if (extension_loaded('pdo_sqlite') && defined('PDO::SQLITE_ATTR_OPEN_FLAGS')) {
+        $openFlags = defined('Pdo\Sqlite::ATTR_OPEN_FLAGS') ? Pdo\Sqlite::ATTR_OPEN_FLAGS : PDO::SQLITE_ATTR_OPEN_FLAGS;
+        $db = new PDO('sqlite:' . $path, null, null, [
+            $openFlags => SQLITE3_OPEN_READONLY,
+            PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+            PDO::ATTR_STRINGIFY_FETCHES => false,
+        ]);
+        $db->exec('PRAGMA busy_timeout=250');
+        $db->exec('PRAGMA query_only=ON');
+        return $db;
+    }
+    $db = new SQLite3($path, SQLITE3_OPEN_READONLY);
+    $db->enableExceptions(true);
+    $db->busyTimeout(250);
+    return $db;
+}
 function da_rows($db, $sql, $values) {
+    if ($db instanceof PDO) {
+        $stmt = $db->prepare($sql);
+        foreach ($values as $key => $value) {
+            $stmt->bindValue($key, $value, is_int($value) ? PDO::PARAM_INT : PDO::PARAM_STR);
+        }
+        $stmt->execute();
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
     $stmt = $db->prepare($sql);
     if (!$stmt) { throw new RuntimeException('Query unavailable'); }
     foreach ($values as $key => $value) {
@@ -114,9 +141,7 @@ function da_load($directory, $query, $now) {
     try {
         $path = $directory . '/events.sqlite';
         if (is_link($path) || !is_file($path) || filesize($path) > 67108864) { throw new RuntimeException('Telemetry unavailable'); }
-        $db = new SQLite3($path, SQLITE3_OPEN_READONLY);
-        $db->enableExceptions(true);
-        $db->busyTimeout(250);
+        $db = da_event_reader($path);
         if(in_array($v['view'],['overview','clients','client','domains','domain'],true)){
             try{
                 if(da_labels_filter_active($v)&&in_array($v['view'],['overview','client','domains'],true))$v['labels_joined']=da_labels_attach($db,$directory);
@@ -246,7 +271,8 @@ function da_load($directory, $query, $now) {
         $v['next_cursor']=null;$v['dns_outcomes']=[];$v['destination_names']=[];
         $v['hourly_ready']=false;
     } finally {
-        if ($db !== null) { $db->close(); }
+        if ($db instanceof SQLite3) { $db->close(); }
+        $db = null;
     }
     da_labels_load_visible($v);
     return $v;

@@ -21,7 +21,7 @@
   const panels = [...root.querySelectorAll('[data-panel]')];
   const names = new Map([...root.querySelectorAll('.da-nav [data-nav]')].map(a=>[a.dataset.nav,a.childNodes[1].textContent.trim()]));
   const search = root.querySelector('#da-table-search');
-  const searchText = new WeakMap();
+  let searchText = new WeakMap();
   const applySearch = () => {
     if (!search) return;
     const value=search.value.toLowerCase();
@@ -88,7 +88,13 @@
     t.textContent=timeMode.value==='utc'?d.toISOString().replace('T',' ').slice(0,19)+' UTC':localTime.format(d);
     t.title=d.toISOString();
   });
-  timeMode.addEventListener('change',()=>{preference('time',timeMode.value);setTimes();});setTimes();
+  timeMode.addEventListener('change',()=>{
+    preference('time',timeMode.value);
+    setTimes();
+    searchText=new WeakMap();
+    if(search?.value)applySearch();
+  });
+  setTimes();
   const dialog=root.querySelector('#da-event-dialog'), fields=root.querySelector('#da-event-fields');
   root.addEventListener('click',e=>{
     const b=e.target.closest?.('button[data-detail],button[data-detail-delta]');if(!b||!root.contains(b))return;

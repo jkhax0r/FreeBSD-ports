@@ -64,7 +64,7 @@ function da_inspect_load($db,&$v,$query) {
     $counts=da_rows($db,'SELECT '.$count.',count(DISTINCT client) AS clients,count(*) AS n,min(time) AS oldest,max(time) AS newest FROM events WHERE '.$where,$params)[0];
     $v['inspect_counts']=$counts;$v['retention']=['oldest'=>$counts['oldest'],'newest'=>$counts['newest'],'n'=>$counts['n']];
     $v['inspect_clients']=da_rows($db,'SELECT client,'.$count.',max(time) AS latest FROM events WHERE '.$where.' GROUP BY client ORDER BY latest DESC,client LIMIT 100',$params);
-    $v['callback_answers_ready']=(int)$db->querySingle("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='reply_answers'")===1;
+    $v['callback_answers_ready']=(bool)da_rows($db,"SELECT 1 FROM sqlite_master WHERE type='table' AND name='reply_answers'",[]);
     if($v['callback_answers_ready']) {
         $v['callback_answers']=da_rows($db,'SELECT query,owner,rrtype,value,client,count(*) AS records,max(time) AS latest,max(expires_utc) AS furthest_expiry FROM reply_answers WHERE time>=:since AND time<=:until AND '.($domain?'query':'value').'=:target'.$clientWhere.' GROUP BY query,owner,rrtype,value,client ORDER BY latest DESC,query,owner,value,client LIMIT 50',$params);
     }
