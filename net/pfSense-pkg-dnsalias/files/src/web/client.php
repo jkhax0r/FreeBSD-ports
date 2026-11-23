@@ -271,7 +271,10 @@
         next.querySelector(area+' [aria-current]')?.focus({preventScroll:true});
       }
     }catch(error){
-      if(sequence===timelineSequence&&status)status.textContent='Could not update activity. The previous results are still shown; use Refresh now or open the link normally.';
+      if(sequence===timelineSequence){
+        root.querySelector('#da-refresh-now').href=url.href;
+        if(status)status.textContent='Could not update activity. The previous results are still shown. Use Refresh now to retry the requested view.';
+      }
     }finally{
       clearTimeout(timeout);
       if(sequence===timelineSequence){root.querySelector('#da-client')?.removeAttribute('aria-busy');timelineRequest=null;pendingTimeline=null;}
@@ -283,7 +286,8 @@
     const link=event.target.closest?.('#da-client .da-feed-filters a, #da-client .da-client-cards a, #da-client .da-pagination a');
     if(!link||!timelineUrl(link.href))return;
     event.preventDefault();
-    if(!timelineRequest&&link.matches('.da-page-sizes a[aria-current]'))return;
+    if(!timelineRequest&&link.matches('.da-page-sizes a[aria-current]')&&
+       displayedTimeline===location.pathname+location.search&&!root.querySelector('.da-feed-status')?.textContent)return;
     // Re-selecting a freshly displayed filter should not enqueue another
     // query. Links from older cursors still select the latest activity.
     if(!timelineRequest&&link.matches('.da-feed-filters a[aria-current]')&&performance.now()-pageStarted<30000){
