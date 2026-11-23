@@ -1,6 +1,6 @@
 # DNS Alias
 
-DNS Alias 0.2.42 targets pfSense 2.9.0, Unbound 1.26.1, FreeBSD 16 amd64
+DNS Alias targets pfSense 2.9.0, Unbound 1.26.1, FreeBSD 16 amd64
 and CPython 3.11. The checked-in source includes the five C extensions.
 The firewall-table helper indexes exact names and wildcard suffixes for larger
 alias sets. CNAME targets must preserve their DNS label boundaries.
@@ -24,7 +24,12 @@ no firewall rules. The package works with plain Unbound. pfBlockerNG integration
 is optional.
 
 Each trusted answer contributes an address until its remaining DNS TTL expires.
-Multiple names and clients can contribute to the same destination table.
+Multiple names and clients can contribute to the same destination table. An
+address stays in the table until its last matching lease expires. Unbound
+can report the full answer before sending a truncated UDP response to a
+client. The table can therefore contain those addresses before the client
+retries over TCP. Reply statistics record what Unbound observed. Delivery
+to the client is outside their coverage.
 Stopping the service empties its tables. Rule order determines what then
 happens to new traffic. Shared CDN addresses can match several domains.
 
