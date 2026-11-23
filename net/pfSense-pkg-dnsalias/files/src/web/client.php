@@ -397,7 +397,17 @@
       identityNote.textContent='Client names updated';
     };
     const prefetch=async attempt=>{
-      if(document.hidden){identityNote.textContent='Client names refresh requested';return;}
+      if(document.hidden){
+        identityNote.textContent='Client names will refresh when this tab is visible';
+        const resume=()=>{
+          if(document.hidden)return;
+          document.removeEventListener('visibilitychange',resume);
+          prefetch(attempt);
+        };
+        document.addEventListener('visibilitychange',resume);
+        return;
+      }
+      identityNote.textContent='Refreshing client names…';
       const abort=new AbortController(),limit=setTimeout(()=>abort.abort(),2000);
       try {
         const previous=observedNames(root);
@@ -443,8 +453,27 @@
   };
   setTimeout(pollControls,1000);
   const refresh=root.querySelector('#da-refresh');
-  const savedRefresh=preference('refresh');if(['0','30','60'].includes(savedRefresh))refresh.value=savedRefresh;
-  const arm=()=>{clearTimeout(timer);if(refresh.value!=='0'&&!root.querySelector('#da-trial-control'))timer=setTimeout(()=>{if(!document.hidden&&!dialog.open&&!policyDialog.open&&!labelDialog?.open)location.reload();else arm();},Number(refresh.value)*1000);};
+  const savedRefresh=preference('refresh');
+  if(!refresh.disabled&&['0','30','60'].includes(savedRefresh))refresh.value=savedRefresh;
+  const hasAliasDraft=()=>{
+    for(const field of root.querySelectorAll('.da-alias-form input:not([type="hidden"]),.da-alias-form textarea,.da-alias-form select')){
+      if(field.tagName==='SELECT'){
+        const initial=field.querySelector('option[selected]')||field.options[0];
+        if(initial&&field.value!==initial.value)return true;
+      }else if(field.type==='checkbox'){
+        if(field.checked!==field.defaultChecked)return true;
+      }else if(field.value!==field.defaultValue)return true;
+    }
+    return false;
+  };
+  const arm=()=>{
+    clearTimeout(timer);
+    if(refresh.disabled||refresh.value==='0'||root.querySelector('#da-trial-control'))return;
+    timer=setTimeout(()=>{
+      if(document.hidden||dialog.open||policyDialog.open||labelDialog?.open||hasAliasDraft())arm();
+      else location.reload();
+    },Number(refresh.value)*1000);
+  };
   refresh.addEventListener('change',()=>{preference('refresh',refresh.value);arm();});arm();
   // Freshness must expire even if the user leaves a manually refreshed page open.
   let pageStarted=performance.now(),statusAge=Number(root.dataset.statusAge);
