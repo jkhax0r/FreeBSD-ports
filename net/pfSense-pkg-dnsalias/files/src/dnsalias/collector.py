@@ -187,19 +187,42 @@ class EventStore:
             raise RuntimeError("database storage cap reached; collector stopped")
 
     def storage(self):
-        return {"rows":self.db.execute("SELECT count(*) FROM events").fetchone()[0],
+        rows = self.db.execute("SELECT kind,count(*),min(time),max(time) FROM events GROUP BY kind")
+        return self._storage([{"kind":kind,"rows":count,"oldest":oldest,"newest":newest}
+                              for kind,count,oldest,newest in rows])
+
+    def _storage(self, by_kind):
+        return {"rows":sum(row["rows"] for row in by_kind),
                 "page_count":self.db.execute("PRAGMA page_count").fetchone()[0],
                 "page_size":self.page_size,"writer_page_limit":self.max_pages,
                 "journal_mode":self.db.execute("PRAGMA journal_mode").fetchone()[0],
                 "event_limit":self.max_events,"database_byte_limit":self.max_db_bytes,"hourly":self.hourly.summary(),
                 "dns_reserved_events":self.dns_reserved_events,
-                "raw_by_kind":[{"kind":kind,"rows":count,"oldest":oldest,"newest":newest} for kind,count,oldest,newest in
-                    self.db.execute("SELECT kind,count(*),min(time),max(time) FROM events GROUP BY kind")],
+                "raw_by_kind":by_kind,
                 "retention_policy":"Latest collected DNS evidence protected within shared row/24-hour limits; unused reserve is available to other logs. Missing records do not prove zero traffic."}
 
     def summary(self):
         rows=self.db.execute("SELECT kind,action,count(*) FROM events WHERE session=? GROUP BY kind,action",(self.session,)).fetchall()
         return [{"kind":k,"action":a,"retained_events":c} for k,a,c in rows]
+
+    def status_counts(self):
+        """Read current-session and all-session event counts from the same SQLite snapshot."""
+        query = """SELECT kind, action, count(*), min(time), max(time),
+                          count(*) FILTER (WHERE session = ?)
+                   FROM events GROUP BY kind, action ORDER BY kind, action"""
+        retained = []
+        by_kind = {}
+        for kind, action, count, oldest, newest, current in self.db.execute(query, (self.session,)):
+            if current:
+                retained.append({"kind":kind, "action":action, "retained_events":current})
+            if kind in by_kind:
+                group = by_kind[kind]
+                group["rows"] += count
+                group["oldest"] = min(oldest, group["oldest"])
+                group["newest"] = max(newest, group["newest"])
+            else:
+                by_kind[kind] = {"kind":kind, "rows":count, "oldest":oldest, "newest":newest}
+        return {"retained":retained, "storage":self._storage(list(by_kind.values()))}
 
     def close(self):
         self.db.close()
@@ -325,7 +348,7 @@ def run(data_dir, duration, resolver_log="/var/log/resolver.log", filter_log="/v
                     pending.clear()
                 if sample_due or was_busy:
                     store.prune(now)
-                    status.update(retained=store.summary(),storage=store.storage(),storage_observed_utc=now)
+                    status.update(store.status_counts(), storage_observed_utc=now)
                 status.pop("storage_busy_since",None)
             except sqlite3.OperationalError as error:
                 # EventStore commits raw rows and hourly counts together. Only
@@ -357,7 +380,7 @@ def run(data_dir, duration, resolver_log="/var/log/resolver.log", filter_log="/v
             status.update(updated_utc=time.time(),counts=dict(counts),pending_log_events=0,retained=[])
             if store is not None:
                 try:
-                    status.update(retained=store.summary(),storage=store.storage(),storage_observed_utc=time.time())
+                    status.update(store.status_counts(), storage_observed_utc=time.time())
                 except sqlite3.Error as exc:
                     status["summary_error"]=type(exc).__name__
             write_json(data_dir/"status.json",status)

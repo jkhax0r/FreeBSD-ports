@@ -294,7 +294,7 @@ function da_saved_aliases_render(array $policies,array $service,bool $can,string
             $label=da_h($ip);
             $destinations[]=filter_var($ip,FILTER_VALIDATE_IP)?'<a href="dnsalias_status.php?view=ip&amp;destination='.rawurlencode($ip).'">'.$label.'</a>':$label;
         }
-        echo '<details><summary>'.da_h($name).' · '.($count===null?'Recorded destinations (current membership unknown)':da_h($count).' live destinations').'</summary><p>'.implode(', ',$destinations).'</p><p class="da-footnote">'.($count===null?'Up to 100 recorded addresses; this is not a current PF membership check.':'Up to 100 current members shown, read when this page opens.').' Select an IP to inspect recent DNS names and observed traffic.</p></details>';
+        echo '<details data-da-member-table="'.da_h($name).'"><summary>'.da_h($name).' · '.($count===null?'Recorded destinations (current membership unknown)':da_h($count).' live destinations').'</summary><p>'.implode(', ',$destinations).'</p><p class="da-footnote">'.($count===null?'Up to 100 recorded addresses; this is not a current PF membership check.':'Up to 100 current members shown, read when this page opens.').' Select an IP to inspect recent DNS names and observed traffic.</p></details>';
     }
     echo '<p class="da-footnote">Rule references use the main ruleset snapshot from '.da_h(da_when($reference_snapshot['observed'])).'. '.(!$reference_snapshot['known']?'Reference snapshot unavailable. ':''). 'No references shown does not prove the alias is unused.</p>';
     if($can){

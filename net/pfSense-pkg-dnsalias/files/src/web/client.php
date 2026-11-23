@@ -57,11 +57,24 @@
   show(names.has(hashView)?hashView:root.dataset.view);
   // Restore the visible search only on the history entry refreshed by this timer.
   const savedSearch=history.state?.dnsAliasRefreshSearch;
-  if(savedSearch && search){
-    const state={...history.state};delete state.dnsAliasRefreshSearch;
+  const savedMembers=history.state?.dnsAliasRefreshMembers;
+  if(savedSearch || savedMembers){
+    const state={...history.state};delete state.dnsAliasRefreshSearch;delete state.dnsAliasRefreshMembers;
     history.replaceState(state,'');
-    if(savedSearch.url===location.href && savedSearch.view===root.dataset.view && typeof savedSearch.text==='string'){
+    if(search && savedSearch?.url===location.href && savedSearch.view===root.dataset.view && typeof savedSearch.text==='string'){
       search.value=savedSearch.text;applySearch();
+    }
+    if(root.dataset.view==='aliases' && savedMembers?.url===location.href && Array.isArray(savedMembers.open)){
+      const open=new Set(savedMembers.open);
+      for(const group of root.querySelectorAll('details[data-da-member-table]')){
+        const table=group.dataset.daMemberTable;
+        if(!open.has(table))continue;
+        group.open=true;
+        if(table===savedMembers.focusTable){
+          const link=Array.from(group.querySelectorAll('a')).find(a=>a.href===savedMembers.focusLink);
+          (link||group.querySelector('summary'))?.focus({preventScroll:true});
+        }
+      }
     }
   }
   root.querySelectorAll('[data-nav]').forEach(a=>a.addEventListener('click',e=>{
@@ -481,9 +494,17 @@
     timer=setTimeout(()=>{
       if(document.hidden||dialog.open||policyDialog.open||labelDialog?.open||hasFormDraft())arm();
       else {
-        if(search?.value){
+        const open=root.dataset.view==='aliases'?Array.from(root.querySelectorAll('details[data-da-member-table][open]')):[];
+        if(search?.value || open.length){
           try{
-            history.replaceState({...history.state,dnsAliasRefreshSearch:{url:location.href,view:root.dataset.view,text:search.value}},'');
+            const state={...history.state};
+            if(search?.value)state.dnsAliasRefreshSearch={url:location.href,view:root.dataset.view,text:search.value};
+            if(open.length){
+              const focused=document.activeElement,group=open.find(el=>el.contains(focused));
+              state.dnsAliasRefreshMembers={url:location.href,open:open.map(el=>el.dataset.daMemberTable),
+                focusTable:group?.dataset.daMemberTable,focusLink:focused?.closest('a')?.href};
+            }
+            history.replaceState(state,'');
           }catch(_){arm();return;}
         }
         location.reload();

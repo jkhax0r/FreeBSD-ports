@@ -86,12 +86,12 @@ class ObserverStorageTests(unittest.TestCase):
             store_type = collector.EventStore
             steps = []
             class BusySummary(store_type):
-                def summary(self):
+                def status_counts(self):
                     if len(steps) == 1:
                         error = sqlite3.OperationalError('database is busy')
                         error.sqlite_errorcode = sqlite3.SQLITE_BUSY
                         raise error
-                    return super().summary()
+                    return super().status_counts()
             def step(stop):
                 self.assertLess(len(steps), 3)
                 state = json.loads((folder / 'status.json').read_bytes())
@@ -111,3 +111,30 @@ class ObserverStorageTests(unittest.TestCase):
                 self.assertEqual(db.execute('SELECT count(*) FROM events').fetchone(), (1,))
                 self.assertEqual(db.execute('SELECT sum(n) FROM hourly_counts').fetchone(), (1,))
             db.close()
+
+    def test_retained_and_raw_counts_share_one_event_snapshot(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / 'events.sqlite'
+            first = collector.EventStore(path, 'first')
+            other = collector.EventStore(path, 'other')
+            try:
+                self.assertEqual(first.status_counts()['retained'], [])
+                query = {'kind':'dns_query', 'time':10, 'name':'example.com'}
+                packet = {'kind':'firewall_packet', 'time':15, 'action':'pass'}
+                first.insert([query, packet], now=20)
+                other.insert([dict(query, time=12), dict(packet, action='block', time=17)], now=20)
+                expected = first.summary()
+                raw = first.storage()['raw_by_kind']
+                storage = first._storage
+                def after_grouping(by_kind):
+                    other.insert([dict(query, time=19)], now=20)
+                    return storage(by_kind)
+                with patch.object(first, '_storage', side_effect=after_grouping):
+                    sampled = first.status_counts()
+                self.assertEqual(sampled['retained'], expected)
+                self.assertEqual(sampled['storage']['rows'], 4)
+                self.assertEqual(sampled['storage']['raw_by_kind'], raw)
+                self.assertEqual(first.storage()['rows'], 5)
+            finally:
+                other.close()
+                first.close()
