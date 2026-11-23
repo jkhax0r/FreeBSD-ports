@@ -139,6 +139,16 @@ function da_chart($v,$kind) {
     echo '</svg>';
 }
 function da_retention($status) {
+    $counts=$status['counts']??[];
+    if(isset($status['storage_busy_since'])&&($status['state']??'')==='running'){
+        echo '<p class="da-footnote"><strong>Log storage busy.</strong> At the last check, '.da_h(da_number($status['pending_log_events']??null)).' log records were waiting to be stored. ';
+        echo isset($status['storage_observed_utc'])?'The collector last verified retention totals at '.da_h(da_when($status['storage_observed_utc'])).'.':'The first retention totals are pending.';
+        echo '</p>';
+    }
+    if(($counts['events_dropped_batch_limit']??0)>0)
+        echo '<p class="da-footnote">The collector discarded '.da_h(da_number($counts['events_dropped_batch_limit'])).' log records at its batch limit.</p>';
+    if(($counts['events_unconfirmed_at_exit']??0)>0)
+        echo '<p class="da-footnote">The collector exited with '.da_h(da_number($counts['events_unconfirmed_at_exit'])).' unconfirmed log records.</p>';
     $storage=is_array($status['storage']??null)?$status['storage']:[];
     $history=is_array($storage['raw_by_kind']??null)?$storage['raw_by_kind']:[];
     if (!$history) { return; }

@@ -279,8 +279,6 @@ def run(data_dir, duration, resolver_log="/var/log/resolver.log", filter_log="/v
     last_identity_sample=None
     pending=[]
     try:
-        store=EventStore(data_dir/"events.sqlite",session)
-        store.prune(time.time())
         while not stopped and (duration == 0 or time.monotonic()-started < duration):
             now=time.time()
             for reader, parser in readers:
@@ -294,16 +292,12 @@ def run(data_dir, duration, resolver_log="/var/log/resolver.log", filter_log="/v
                     event=parser(line)
                     if event:
                         counts[event["kind"]]+=1
-                        if len(pending)<2000:
+                        if len(pending)<MAX_BATCH_EVENTS:
                             pending.append(event)
                         else:
                             counts["events_dropped_batch_limit"]+=1
                 status["gaps"].extend({"time":now,"source":str(reader.path),"reason":gap} for gap in reader.gaps)
                 reader.gaps.clear()
-            if pending:
-                inserted=store.insert(pending,now=now)
-                counts["events_expired_on_insert"]+=len(pending)-inserted
-                pending.clear()
             if consume_identity_request(data_dir,now=time.time()):
                 sample_clock=time.monotonic()
                 if last_identity_sample is None or sample_clock-last_identity_sample>=60:
@@ -320,14 +314,35 @@ def run(data_dir, duration, resolver_log="/var/log/resolver.log", filter_log="/v
                 except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
                     status["gaps"].append({"time":now,"source":"pf_counters","reason":type(exc).__name__})
                 next_rules=time.monotonic()+60
-            if time.monotonic()>=next_status:
-                store.prune(now)
-                status.update(state="running",updated_utc=now,counts=dict(counts),retained=store.summary(),storage=store.storage())
+            sample_due=time.monotonic()>=next_status
+            was_busy="storage_busy_since" in status
+            try:
+                if store is None:
+                    store=EventStore(data_dir/"events.sqlite",session)
+                if pending:
+                    inserted=store.insert(pending,now=now)
+                    counts["events_expired_on_insert"]+=len(pending)-inserted
+                    pending.clear()
+                if sample_due or was_busy:
+                    store.prune(now)
+                    status.update(retained=store.summary(),storage=store.storage(),storage_observed_utc=now)
+                status.pop("storage_busy_since",None)
+            except sqlite3.OperationalError as error:
+                # EventStore commits raw rows and hourly counts together. Only
+                # retry a known lock after rollback. A failed open closes its
+                # connection. Keep pending observations within the same batch cap.
+                code=getattr(error,"sqlite_errorcode",0)&255
+                if code not in (sqlite3.SQLITE_BUSY,sqlite3.SQLITE_LOCKED) or (store is not None and store.db.in_transaction):
+                    raise
+                counts["storage_busy_polls"]+=1
+                status.setdefault("storage_busy_since",now)
+            if sample_due or was_busy!=("storage_busy_since" in status):
+                status.update(state="running",updated_utc=now,counts=dict(counts),pending_log_events=len(pending))
                 status['log_readers']=[{'source':str(reader.path),**reader.status()} for reader,_ in readers]
                 status["gaps"]=status["gaps"][-100:]
                 write_json(data_dir/"status.json",status)
                 next_status=time.monotonic()+10
-            time.sleep(1)
+            if not stopped:time.sleep(1)
         status["state"]="stopped"
         status["stop_reason"]="signal" if stopped else "bounded_trial_completed"
     except Exception as exc:
@@ -337,10 +352,12 @@ def run(data_dir, duration, resolver_log="/var/log/resolver.log", filter_log="/v
     finally:
         for reader, _ in readers: reader.close()
         try:
-            status.update(updated_utc=time.time(),counts=dict(counts),retained=[])
+            if pending:
+                counts["events_unconfirmed_at_exit"]+=len(pending)
+            status.update(updated_utc=time.time(),counts=dict(counts),pending_log_events=0,retained=[])
             if store is not None:
                 try:
-                    status.update(retained=store.summary(),storage=store.storage())
+                    status.update(retained=store.summary(),storage=store.storage(),storage_observed_utc=time.time())
                 except sqlite3.Error as exc:
                     status["summary_error"]=type(exc).__name__
             write_json(data_dir/"status.json",status)

@@ -18,6 +18,7 @@ if (($_GET['client_identity']??null)==='1' && ($_SERVER['REQUEST_METHOD']??'GET'
     if($selected!==null&&(!is_string($selected)||!filter_var($selected,FILTER_VALIDATE_IP))){
         http_response_code(400);echo '{"error":"Invalid client address"}';exit;
     }
+    if($selected!==null)$selected=da_ip_canonical($selected);
     echo json_encode(da_identity_payload(da_identity_snapshot('/var/db/dnsalias'),time(),$selected),JSON_HEX_TAG|JSON_HEX_AMP|JSON_HEX_APOS|JSON_HEX_QUOT|JSON_INVALID_UTF8_SUBSTITUTE);
     exit;
 }
