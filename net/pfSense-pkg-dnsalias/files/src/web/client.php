@@ -290,9 +290,21 @@
        displayedTimeline===location.pathname+location.search&&!root.querySelector('.da-feed-status')?.textContent)return;
     // Re-selecting a freshly displayed filter should not enqueue another
     // query. Links from older cursors still select the latest activity.
-    if(!timelineRequest&&link.matches('.da-feed-filters a[aria-current]')&&performance.now()-pageStarted<30000){
+    const currentFilter=link.matches('.da-feed-filters a[aria-current]')
+      || (link.matches('.da-client-cards a')&&link.href===root.querySelector('#da-client .da-feed-filters:not(.da-page-sizes) a[aria-current]')?.href);
+    if(currentFilter&&performance.now()-pageStarted<30000){
       const shown=new URL(displayedTimeline,location.href);
-      if(!shown.searchParams.has('before')&&!shown.searchParams.has('asof')&&!root.querySelector('.da-feed-status')?.textContent)return;
+      const panel=root.querySelector('#da-client'),status=panel.querySelector('.da-feed-status');
+      if(!shown.searchParams.has('before')&&!shown.searchParams.has('asof')&&displayedTimeline===location.pathname+location.search){
+        if(timelineRequest&&pendingTimeline!==link.pathname+link.search){
+          // The user has returned to the fresh feed already on screen.
+          ++timelineSequence;timelineRequest.abort();timelineRequest=null;pendingTimeline=null;
+          panel.removeAttribute('aria-busy');if(status)status.textContent='';
+          root.querySelector('#da-refresh-now').href=location.href;
+          return;
+        }
+        if(!timelineRequest&&!status?.textContent)return;
+      }
     }
     loadTimeline(link.href);
   });
