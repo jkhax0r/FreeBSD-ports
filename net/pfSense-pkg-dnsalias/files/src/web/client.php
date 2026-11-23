@@ -64,22 +64,84 @@
   }));
   if(search)search.addEventListener('input',applySearch);
   root.addEventListener('keydown',e=>{if(e.key==='Escape'&&document.activeElement===search){search.value='';applySearch();}});
+  let sortCollator;
+  // Keys contain only static column labels and the view name. Remember only
+  // the column and direction for this browser tab.
+  const pageOrders=new Map();
+  const sortKey=table=>'sort.'+table.closest('[data-panel]').dataset.panel+'.'+
+    Array.from(table.tHead.rows[0].cells,h=>h.textContent.trim()).join('|');
+  const sortTable = (table, index, requestedDirection, remember=true) => {
+    const header=table.tHead?.rows[0]?.cells[index], body=table.tBodies[0];
+    if(!header||!body)return;
+    if(!remember&&header.getAttribute('aria-sort')===requestedDirection)return;
+    const rows=Array.from(body.rows).filter(row=>row.hasAttribute('data-row'));
+    const keyed=rows.map(row=>{
+      const cell=row.cells[index];
+      if(cell.dataset.ipOrder!==undefined)return {row,type:'ip',value:cell.dataset.ipOrder};
+      const raw=cell.dataset.order??cell.querySelector('time[data-utc]')?.dataset.utc??cell.textContent.trim();
+      const number=Number(raw);
+      return raw!==''&&Number.isFinite(number)?{row,type:'number',value:number}:{row,type:'text',value:raw};
+    });
+    let direction=requestedDirection;
+    if(!direction){
+      const previous=header.getAttribute('aria-sort');
+      if(previous==='ascending')direction='descending';
+      else if(previous==='descending')direction='ascending';
+      else direction=keyed[0]?.type==='number'?'descending':'ascending';
+    }
+    if(!sortCollator)sortCollator=new Intl.Collator(undefined,{numeric:true});
+    keyed.sort((a,b)=>{
+      let order;
+      if(a.type!==b.type)order=a.type<b.type?-1:1;
+      else if(a.type==='number')order=a.value-b.value;
+      else if(a.type==='ip')order=a.value<b.value?-1:a.value>b.value?1:0;
+      else order=sortCollator.compare(a.value,b.value);
+      return direction==='descending'?-order:order;
+    });
+    if(keyed.some((item,i)=>item.row!==rows[i])){
+      let anchor=body.firstElementChild;
+      for(const {row} of keyed){
+        if(row===anchor)anchor=anchor.nextElementSibling;
+        else if(body.moveBefore)body.moveBefore(row,anchor);
+        else body.insertBefore(row,anchor);
+      }
+    }
+    const previous=table.tHead.querySelector('[aria-sort="ascending"],[aria-sort="descending"]');
+    previous?.removeAttribute('aria-sort');
+    header.setAttribute('aria-sort',direction);
+    if(remember){
+      const key=sortKey(table),value=index+','+direction;
+      pageOrders.set(key,value);
+      preference(key,value);
+    }
+    if(table.classList.contains('da-client-timeline')){
+      const controls=table.parentElement.previousElementSibling;
+      if(controls?.classList.contains('da-card-sort')){
+        controls.querySelector('select').value=String(index);
+        controls.querySelector('button').textContent=direction==='descending'?'Descending ↓':'Ascending ↑';
+      }
+    }
+  };
   root.addEventListener('click',e=>{
-    const button=e.target.closest?.('.da-sort');if(!button||!root.contains(button))return;
-    const th=button.closest('th'), table=th.closest('table'), index=th.cellIndex;
-    const descending=th.getAttribute('aria-sort')!=='descending';
-    table.querySelectorAll('th').forEach(h=>h.setAttribute('aria-sort','none'));
-    th.setAttribute('aria-sort',descending?'descending':'ascending');
-    const rows=[...table.tBodies[0].querySelectorAll('[data-row]')];
-    const collator=new Intl.Collator(undefined,{numeric:true});
-    const keyed=rows.map(row=>{const cell=row.cells[index];return {row,value:cell.dataset.order??cell.querySelector('[data-utc]')?.dataset.utc??cell.textContent.trim()};});
-    keyed.sort((a,b)=>{const x=a.value,y=b.value;const n=x!==''&&y!==''&&Number.isFinite(Number(x))&&Number.isFinite(Number(y))?Number(x)-Number(y):collator.compare(x,y);return descending?-n:n;});
-    const fragment=document.createDocumentFragment();
-    keyed.forEach(item=>fragment.appendChild(item.row));table.tBodies[0].appendChild(fragment);
+    const button=e.target.closest?.('.da-sort,.da-card-sort button');if(!button)return;
+    const th=button.closest('th');
+    if(th){sortTable(th.closest('table'),th.cellIndex);return;}
+    const controls=button.closest('.da-card-sort');
+    sortTable(controls.nextElementSibling.querySelector('table'),Number(controls.querySelector('select').value));
+  });
+  root.addEventListener('change',e=>{
+    const controls=e.target.closest?.('.da-card-sort');
+    if(controls&&e.target.tagName==='SELECT')sortTable(controls.nextElementSibling.querySelector('table'),Number(e.target.value));
   });
   const timeMode=root.querySelector('#da-time-mode');
   // Preferences only, scoped to this tab; never persist observations or filters.
   const preference=(key,value)=>{try {if(value===undefined)return sessionStorage.getItem('dnsalias.ui.'+key);sessionStorage.setItem('dnsalias.ui.'+key,value);}catch(_){}return null;};
+  const restoreOrder=table=>{
+    const key=sortKey(table),saved=pageOrders.get(key)??preference(key);
+    const match=saved&&/^([0-9]+),(ascending|descending)$/.exec(saved);
+    if(match)sortTable(table,Number(match[1]),match[2],false);
+  };
+  root.querySelectorAll('[data-panel] table.da-table').forEach(restoreOrder);
   const savedTime=preference('time');if(['local','utc'].includes(savedTime))timeMode.value=savedTime;
   let localTime;
   const setTimes=(scope=root)=>scope.querySelectorAll('time[data-utc]').forEach(t=>{
@@ -174,6 +236,8 @@
       const scrollX=window.scrollX,scrollY=window.scrollY,oldFocus=document.activeElement;
       if(push&&target!==location.pathname+location.search)history.pushState({dnsAliasClientFeed:true},'',url);
       setTimes(next);
+      const nextTable=next.querySelector('.da-client-timeline');
+      if(nextTable)restoreOrder(nextTable);
       next.classList.add('da-visible');
       const index=panels.indexOf(old);old.replaceWith(next);if(index>=0)panels[index]=next;
       for(const key of ['statusTime','statusAge','running'])root.dataset[key]=nextRoot.dataset[key];

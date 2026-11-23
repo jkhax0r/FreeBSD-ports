@@ -167,17 +167,23 @@ function da_load($directory, $query, $now) {
         $dnsparams = $params;
         if ($v['domain'] !== '') { $dnswhere .= ' AND instr(lower(domain), :domain) > 0'; $dnsparams[':domain'] = $v['domain']; }
         $webPredicate = " AND kind = 'firewall_packet' AND json_extract(body,'$.destination_port') IN (80,443) AND json_extract(body,'$.protocol') IN ('tcp','udp')";
-        $webwhere = $where . $webPredicate;
         $webparams = $params;
-        if ($v['tracker'] !== '') { $webwhere .= ' AND tracker = :tracker'; $webparams[':tracker'] = $v['tracker']; }
-        if ($v['destination'] !== '') { $webwhere .= " AND json_extract(body,'$.destination') = :destination"; $webparams[':destination'] = $v['destination']; }
-        if ($v['action'] !== '') { $webwhere .= ' AND action = :action'; $webparams[':action'] = $v['action']; }
+        if ($v['tracker'] !== '') { $webPredicate .= ' AND tracker = :tracker'; $webparams[':tracker'] = $v['tracker']; }
+        if ($v['destination'] !== '') { $webPredicate .= " AND json_extract(body,'$.destination') = :destination"; $webparams[':destination'] = $v['destination']; }
+        if ($v['action'] !== '') { $webPredicate .= ' AND action = :action'; $webparams[':action'] = $v['action']; }
+        $webwhere = $where . $webPredicate;
         $summaryWindow = $where;
         $dnsSummary = $dnswhere;
         $webSummary = $webwhere;
         // The two time bounds are the only parameters on an unscoped report.
+        // Activity and Blocks group by destination. Their grouping index
+        // also helps when a decision or tracker narrows a wide time window.
+        // Keep the direct seeks for one client, one IP, or a short window.
+        $destinationReport = in_array($v['view'], ['activity','blocks'], true)
+            && $v['client'] === '' && $v['destination'] === '';
+        $unfilteredReport = count($dnsparams) === 2 && count($webparams) === 2;
         $dense = in_array($v['view'], ['overview','clients','domains','activity','blocks'], true)
-            && count($dnsparams) === 2 && count($webparams) === 2 && !da_labels_filter_active($v)
+            && ($destinationReport || $unfilteredReport)
             && da_dense_report_window($db, $where, $params);
         if ($dense) {
             // IS TRUE preserves both bound comparisons. SQLite can pick a
@@ -187,15 +193,16 @@ function da_load($directory, $query, $now) {
             $webSummary = $summaryWindow . $webPredicate;
         }
         if ($v['view']==='domains') {
-            $dnswhere.=da_labels_clause($v,$dnsparams);
-            $v['dns'] = da_rows($db, 'SELECT time,client,domain,body FROM events WHERE '.$dnswhere.' ORDER BY time DESC,id DESC LIMIT 100', $dnsparams);
+            $listParams=$dnsparams;
+            $listWhere=$dnswhere.da_labels_clause($v,$listParams);
+            $v['dns'] = da_rows($db, 'SELECT time,client,domain,body FROM events WHERE '.$listWhere.' ORDER BY time DESC,id DESC LIMIT 100', $listParams);
         }
         if (in_array($v['view'],['overview','domains'],true)) {
             $limit=$v['view']==='overview'?6:100;
             $rankWhere=$dnswhere;$rankParams=$dnsparams;
             // Include the declaring predicate so the domain index can cover the ranking.
             if ($dense) $rankWhere = $dnsSummary . " AND kind IN ('dns_query','dns_reply_log','dns_policy_log','dns_reply')";
-            if($v['view']==='overview')$rankWhere.=da_labels_clause($v,$rankParams);
+            $rankWhere.=da_labels_clause($v,$rankParams);
             $v['domains'] = da_rows($db, 'SELECT domain,count(*) AS n,count(DISTINCT client) AS clients,max(time) AS latest FROM events WHERE '.$rankWhere.' GROUP BY domain ORDER BY n DESC,domain LIMIT '.$limit, $rankParams);
         }
         if (in_array($v['view'],['overview','clients'],true)) {
@@ -244,21 +251,20 @@ function da_load($directory, $query, $now) {
             $hwhere='bucket >= :since AND bucket <= :until';
             $hp=[':since'=>((int)floor($now/3600)-23)*3600,':until'=>(int)floor($now/3600)*3600];
             if ($v['client']!=='') { $hwhere.=' AND client=:client';$hp[':client']=$v['client']; }
-            $hd=$hwhere." AND kind='dns_query'";$dp=$hp;
-            if ($v['domain']!=='') { $hd.=' AND instr(lower(domain),:domain)>0';$dp[':domain']=$v['domain']; }
-            $hw=$hwhere." AND kind='firewall_packet' AND port IN (80,443) AND protocol IN ('tcp','udp') AND action IN ('pass','block')";$wp=$hp;
-            if ($v['tracker']!=='') { $hw.=' AND tracker=:tracker';$wp[':tracker']=$v['tracker']; }
-            if ($v['destination']!=='') { $hw.=' AND destination=:destination';$wp[':destination']=$v['destination']; }
-            if ($v['action']!=='') { $hw.=' AND action=:action';$wp[':action']=$v['action']; }
-            $hours=[];
-            foreach (da_rows($db,'SELECT bucket,sum(n) AS n FROM hourly_counts WHERE '.$hd.' GROUP BY bucket ORDER BY bucket DESC LIMIT 24',$dp) as $row) {
-                $hours[$row['bucket']]=['bucket'=>$row['bucket'],'dns'=>$row['n'],'pass'=>0,'block'=>0];
-            }
-            foreach (da_rows($db,'SELECT bucket,action,sum(n) AS n FROM hourly_counts WHERE '.$hw.' GROUP BY bucket,action ORDER BY bucket DESC LIMIT 48',$wp) as $row) {
-                if (!isset($hours[$row['bucket']])) { $hours[$row['bucket']]=['bucket'=>$row['bucket'],'dns'=>0,'pass'=>0,'block'=>0]; }
-                $hours[$row['bucket']][$row['action']]=$row['n'];
-            }
-            krsort($hours,SORT_NUMERIC);$v['hourly']=array_values($hours);
+            $dnsHour="kind='dns_query'";
+            if ($v['domain']!=='') { $dnsHour.=' AND instr(lower(domain),:domain)>0';$hp[':domain']=$v['domain']; }
+            $webHour="kind='firewall_packet' AND port IN (80,443) AND protocol IN ('tcp','udp') AND action IN ('pass','block')";
+            if ($v['tracker']!=='') { $webHour.=' AND tracker=:tracker';$hp[':tracker']=$v['tracker']; }
+            if ($v['destination']!=='') { $webHour.=' AND destination=:destination';$hp[':destination']=$v['destination']; }
+            if ($v['action']!=='') { $webHour.=' AND action=:action';$hp[':action']=$v['action']; }
+            // Both series cover the same 24 buckets. Apply their independent
+            // filters before summing so an absent series stays zero.
+            $v['hourly']=da_rows($db,"SELECT bucket,
+                sum(CASE WHEN kind='dns_query' THEN n ELSE 0 END) AS dns,
+                sum(CASE WHEN kind='firewall_packet' AND action='pass' THEN n ELSE 0 END) AS pass,
+                sum(CASE WHEN kind='firewall_packet' AND action='block' THEN n ELSE 0 END) AS block
+                FROM hourly_counts WHERE $hwhere AND (($dnsHour) OR ($webHour))
+                GROUP BY bucket ORDER BY bucket DESC LIMIT 24",$hp);
             }
         }
         }

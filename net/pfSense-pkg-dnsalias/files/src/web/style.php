@@ -28,9 +28,16 @@
 /* Keep the client's decisions and review controls together in narrow panels,
    including pfSense's native theme/sidebar. No horizontal hunt for actions. */
 #da-client{container-type:inline-size}
+#da-console .da-sort span::after{content:' ↕'}
+#da-console th[aria-sort="ascending"] .da-sort span::after{content:' ↑';color:var(--da-blue)}
+#da-console th[aria-sort="descending"] .da-sort span::after{content:' ↓';color:var(--da-blue)}
+#da-console .da-card-sort{display:none}
 #da-console .da-client-timeline td:nth-child(5){white-space:nowrap}
 @container (max-width:900px){
+ #da-console.da-js .da-card-sort{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin:0 0 10px}
+ #da-console .da-card-sort select,#da-console .da-card-sort button{min-height:32px;padding:4px 8px;border:1px solid var(--da-line);border-radius:5px;background:#fff;color:inherit}
  #da-console .da-client-timeline{display:block;width:100%}
+ #da-console.da-js .da-client-timeline .da-sort{display:none}
  #da-console .da-client-timeline thead{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
  #da-console .da-client-timeline tbody{display:block}
  #da-console .da-client-timeline tr[data-row]{display:grid;contain:layout style;grid-template-columns:minmax(0,3fr) minmax(0,2fr);grid-template-areas:"stamp result" "target target" "protocol rule" "evidence evidence" "tags tags" "actions actions";gap:10px 14px;border:1px solid var(--da-line);border-radius:8px;padding:14px;min-width:0}

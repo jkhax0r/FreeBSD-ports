@@ -41,7 +41,7 @@ function da_destination_load($db, &$v) {
 function da_destination($v,$ip,$port=null) {
     $label=$ip;
     if ($port!==null) { $label=(str_contains($ip,':')?'['.$ip.']':$ip).':'.$port; }
-    $cell=da_link($v,$label,['destination'=>$ip,'view'=>'ip']);
+    $cell=da_link($v,$label,['destination'=>$ip,'view'=>'ip'])+da_address_order($ip,$port);
     $names=$v['destination_names'][$ip]??[];
     if (!$names) { return $cell+['destination_context'=>[]]; }
     $details=[];
