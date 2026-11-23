@@ -50,12 +50,16 @@ class _EnrollmentProbe:
     success inference from a DNS answer. Its own native watch avoids sharing a
     kqueue across threads. Cancellation interrupts read-only readiness polling.
     """
-    def __init__(self,target,control,load_open,*,reload_before_query=False):
+    def __init__(self,target,control,load_open,*,reload_before_query=False,persistent_start=False):
         if type(reload_before_query) is not bool:raise ValueError('explicit controlled-reload choice required')
         self.reload_before_query=reload_before_query
+        if type(persistent_start) is not bool or persistent_start and reload_before_query:
+            raise ValueError('initial service enrollment and replacement are separate operations')
+        self.persistent_start=persistent_start
         self.pid=target['resolver_pid'];self.port=target['dns_port'];self.probe=dict(target['probes'][0])
         self.control=control
         self.deadline=load_open+(ReplyStartup.REPLACEMENT_SECONDS if reload_before_query else ReplyStartup.MAX_SECONDS)
+        if persistent_start:self.deadline=load_open+ReplyStartup.INITIAL_SERVICE_SECONDS
         self.cancelled=threading.Event();self.observed=threading.Event()
         self.result={'state':'pending','queries_issued':0,'answers_received':0,'error':None}
         self.thread=threading.Thread(target=self._run,name='dnsalias-startup-probe',daemon=True)
@@ -73,7 +77,8 @@ class _EnrollmentProbe:
                 remaining=self.deadline-time.monotonic()
                 if remaining<=0:raise TimeoutError('existing startup deadline expired')
                 result['stage']='initial_control'
-                result['initial_readiness']=await_control(self.control,CancelWatch(),budget_seconds=min(8,remaining))
+                limit=ReplyStartup.INITIAL_SERVICE_SECONDS if self.persistent_start else ReplyStartup.MAX_SECONDS
+                result['initial_readiness']=await_control(self.control,CancelWatch(),budget_seconds=min(limit,remaining),persistent_start=self.persistent_start)
                 if self.reload_before_query:
                     from .reloadrequest import ReloadRequest
                     if self.cancelled.is_set():result['state']='cancelled';return
@@ -243,10 +248,10 @@ def run(target,emit=None,*,feed=None,cancel_requested=None,supervised_health=Fal
         if feed is None:store=EventStore(data/'events.sqlite',trial_id,busy_timeout_ms=20)
         if feed is not None:feed.before_reload(producer_pid=producer.pid,profile_id=expected.identifier,sources=sources)
         result['load']=operation.reload()
-        startup=ReplyStartup(endpoint.endpoint,expected=expected,producer=producer,load_open=operation.load_open)
+        startup=ReplyStartup(endpoint.endpoint,expected=expected,producer=producer,load_open=operation.load_open,persistent_start=persistent)
         service=(ReplyObservationService(startup,auditor=auditor,watch=main_watch,store=store) if feed is None
             else feed.start(startup,auditor=auditor,watch=main_watch,data=data,session=trial_id,producer_gid=target['control_gid']))
-        probe=_EnrollmentProbe(target,control,operation.load_open);probe.start()
+        probe=_EnrollmentProbe(target,control,operation.load_open,persistent_start=persistent);probe.start()
         from .hookphase import HookPhaseReader
         phase_reader=HookPhaseReader(operation.journal)
         def reader_handoff():

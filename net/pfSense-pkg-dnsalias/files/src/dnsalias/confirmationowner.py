@@ -144,6 +144,8 @@ class ConfirmationOwner:
         # prepare_replacement retains the exited PID and retires its generation.
         # The replacement can acknowledge its reload before its reader is ready.
         wait_seconds = ReplyStartup.MAX_SECONDS
+        if self.producer_pid is None and self.retired_generation is None and expected_generation is None:
+            wait_seconds = ReplyStartup.INITIAL_SERVICE_SECONDS
         if (self.retired_generation is not None and self.producer_pid != producer_pid
                 and expected_generation is None):
             wait_seconds = ReplyStartup.REPLACEMENT_SECONDS

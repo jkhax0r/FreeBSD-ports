@@ -22,13 +22,16 @@ class ReplyStartup:
     MAX_EVENTS=256
     MAX_BYTES=512*1024
     MAX_SECONDS=8.0
+    # An ordinary persistent service start reloads the already verified
+    # resolver. Loading its policy can briefly delay its control and DNS ports.
+    INITIAL_SERVICE_SECONDS=15.0
     # A newly qualified replacement process may still be loading its policy.
     # This is a service enrollment budget, independent of client DNS deadlines.
     REPLACEMENT_SECONDS=15.0
     MAX_DATAGRAMS=64
     BUDGET_SECONDS=.002
 
-    def __init__(self,endpoint,*,expected,producer,load_open,retired_generation=None,discard_before_load=False,required_generation=None):
+    def __init__(self,endpoint,*,expected,producer,load_open,retired_generation=None,discard_before_load=False,required_generation=None,persistent_start=False):
         if not isinstance(endpoint,ReplyEndpoint) or not endpoint.healthy():
             raise ValueError('explicit healthy owned endpoint required')
         if not isinstance(expected,DeploymentFingerprint) or not isinstance(producer,ProducerIdentity):
@@ -47,7 +50,9 @@ class ReplyStartup:
         if type(discard_before_load) is not bool or discard_before_load and retired_generation is None:
             raise ValueError('pre-load discard requires an explicit retired generation')
         self.discard_before_load=discard_before_load
-        self.wait_seconds = self.MAX_SECONDS
+        if type(persistent_start) is not bool or persistent_start and (retired_generation is not None or discard_before_load or required_generation is not None):
+            raise ValueError('initial service enrollment requires a new session')
+        self.wait_seconds = self.INITIAL_SERVICE_SECONDS if persistent_start else self.MAX_SECONDS
         if discard_before_load and retired_generation.producer.pid != producer.pid:
             self.wait_seconds = self.REPLACEMENT_SECONDS
         if not 0 <= time.monotonic()-load_open < self.wait_seconds:
