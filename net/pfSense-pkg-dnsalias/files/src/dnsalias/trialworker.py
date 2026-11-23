@@ -40,11 +40,17 @@ def await_control(control,resolver,*,budget_seconds=8):
     raise TimeoutError('enrolled resolver readiness not established within bound')
 
 
-def match_baseline(probes,baseline,*,port,resolver,budget_seconds=8):
-    """Two matching DNS rounds, with bounded transport-read retries only."""
-    if type(budget_seconds) not in (int,float) or not 0<budget_seconds<=8:raise ValueError('bounded DNS verification budget required')
+def match_baseline(probes,baseline,*,port,resolver,budget_seconds=None,persistent=False):
+    """Confirm two matching DNS rounds after one reload of the enrolled resolver."""
+    if type(persistent) is not bool:raise ValueError('explicit persistent mode required')
+    # The persistent service can reload a large resolver configuration on Stop.
+    # This clock is only used by the independent rollback worker.
+    limit=12 if persistent else 8
+    if budget_seconds is None:budget_seconds=limit
+    if type(budget_seconds) not in (int,float) or not 0<budget_seconds<=limit:raise ValueError('bounded DNS verification budget required')
     if not 1<=len(probes)<=4 or len(probes)!=len(baseline):raise ValueError('bounded matching probe baseline required')
     started=time.monotonic();deadline=started+budget_seconds;rounds=0;attempts=0;verified=[]
+    transport={'timeout':0,'refused':0,'reset':0}
     while resolver.alive() and time.monotonic()<deadline:
         answers=[];attempts+=1
         try:
@@ -52,18 +58,21 @@ def match_baseline(probes,baseline,*,port,resolver,budget_seconds=8):
                 remaining=deadline-time.monotonic()
                 if remaining<=0:raise TimeoutError('DNS verification deadline')
                 answers.append(query(probe['name'],kind=probe['kind'],port=port,timeout_seconds=min(.2,remaining)))
-        except (TimeoutError,ConnectionRefusedError,ConnectionResetError):rounds=0;verified.clear()
+        except (TimeoutError,ConnectionRefusedError,ConnectionResetError) as exc:
+            kind='timeout' if isinstance(exc,TimeoutError) else 'refused' if isinstance(exc,ConnectionRefusedError) else 'reset'
+            transport[kind]+=1;rounds=0;verified.clear()
         else:
             if answers!=baseline:
                 return {'matched':False,'reason':'answer_changed','verified_probes':[],
-                    'read_attempts':attempts,'elapsed_seconds':time.monotonic()-started}
+                    'read_attempts':attempts,'transport_failures':transport,'budget_seconds':budget_seconds,'elapsed_seconds':time.monotonic()-started}
             rounds+=1;verified.extend(probe['name'] for probe in probes)
             if rounds==2 and resolver.alive() and time.monotonic()<=deadline:
                 return {'matched':True,'reason':None,'verified_probes':verified,
-                    'read_attempts':attempts,'elapsed_seconds':time.monotonic()-started}
+                    'read_attempts':attempts,'transport_failures':transport,'budget_seconds':budget_seconds,'elapsed_seconds':time.monotonic()-started}
         time.sleep(min(.05,max(0,deadline-time.monotonic())))
     return {'matched':False,'reason':'deadline_or_resolver_ended','verified_probes':[],
-        'read_attempts':attempts,'elapsed_seconds':time.monotonic()-started}
+            'end_condition':'resolver_ended' if not resolver.alive() else 'deadline',
+        'read_attempts':attempts,'transport_failures':transport,'budget_seconds':budget_seconds,'elapsed_seconds':time.monotonic()-started}
 
 
 def validate_context(value):
@@ -221,7 +230,8 @@ def run(context,emit,*,stop_requested=None,follow_requested=None):
                 raise ValueError('stable successful or negative baseline DNS behavior required')
             identity()
             def verify(current):
-                outcome=match_baseline(context['probes'],baseline,port=context['dns_port'],resolver=resolver)
+                outcome=match_baseline(context['probes'],baseline,port=context['dns_port'],resolver=resolver,
+                    persistent=follow_requested is not None and plan['duration_seconds'] is None)
                 verification.append(outcome)
                 if not outcome['matched']:return False
                 identity();verified.extend(outcome['verified_probes']);return True
