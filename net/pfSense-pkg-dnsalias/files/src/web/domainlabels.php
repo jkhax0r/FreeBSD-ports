@@ -224,7 +224,9 @@ function da_labels_load_visible(array &$v): void {
 }
 function da_labels_return_url(array $query): string {
     $out=[];
-    foreach(['window','client','domain','tracker','destination','action','view','feed','review','tag','hide_tag'] as $key)
+    // The rendered model uses an integer. A submitted URL contains a string.
+    if(in_array($query['window']??null,[15,60,1440,'15','60','1440'],true))$out['window']=(string)$query['window'];
+    foreach(['client','domain','list_domain','tracker','destination','action','view','feed','review','tag','hide_tag'] as $key)
         if(isset($query[$key])&&is_string($query[$key])&&strlen($query[$key])<=253&&$query[$key]!=='')$out[$key]=$query[$key];
     if(in_array($query['rows']??null,['25','50','100'],true))$out['rows']=$query['rows'];
     return 'dnsalias_status.php'.($out?'?'.http_build_query($out,'','&',PHP_QUERY_RFC3986):'');

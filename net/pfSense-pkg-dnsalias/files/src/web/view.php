@@ -105,6 +105,11 @@ function da_load($directory, $query, $now) {
     $v['destination'] = is_string($query['destination'] ?? null) ? trim($query['destination']) : '';
     $v['action'] = is_string($query['action'] ?? null) && in_array($query['action'], ['pass','block'], true) ? $query['action'] : '';
     $v['view'] = is_string($query['view'] ?? null) && in_array($query['view'], ['overview','clients','client','domains','domain','ip','activity','blocks','rules','aliases','coverage'], true) ? $query['view'] : 'overview';
+    // A drill-down has an exact target and may also have a broader list filter.
+    $list_domain = $query['list_domain'] ?? '';
+    $v['list_domain'] = $v['view'] === 'domain' && is_string($list_domain)
+        && strlen($list_domain) <= 253 && !preg_match('/[\x00-\x1f\x7f]/', $list_domain)
+        ? strtolower(trim($list_domain)) : '';
     if (in_array($v['view'],['domain','ip'],true)) { $v['tracker']='';$v['action']=''; }
     if ($v['view']==='ip') { $v['client']=''; }
     if ($v['view']==='domain' && $v['domain']!=='.') { $v['domain']=rtrim($v['domain'],'.'); }

@@ -319,20 +319,32 @@
       }
       const box=root.querySelector('#da-client-identity'),claims=box&&data.clients[box.dataset.client];
       if(box&&Array.isArray(claims)&&claims.length){
+        const focusedHeader=box.contains(document.activeElement)?document.activeElement.closest('th')?.cellIndex:null;
         const wrap=document.createElement('div');wrap.className='da-table-wrap';
         const table=document.createElement('table');table.className='da-table da-identity-table';
         const head=table.createTHead().insertRow();
-        for(const label of ['Name / label','Source','Interface','MAC','Lease expiry']){const th=document.createElement('th');th.scope='col';th.textContent=label;head.append(th);}
+        for(const label of ['Name / label','Source','Interface','MAC','Lease expiry']){
+          const th=document.createElement('th');th.scope='col';
+          const button=document.createElement('button');button.type='button';button.className='da-sort';
+          const arrow=document.createElement('span');arrow.setAttribute('aria-hidden','true');
+          button.append(label,arrow);th.append(button);head.append(th);
+        }
         const body=table.createTBody();
         for(const claim of claims.slice(0,6)){
           const row=body.insertRow();row.setAttribute('data-row','');
-          const expiry=Number.isFinite(claim.expires)?new Date(claim.expires*1000).toISOString().replace('T',' ').slice(0,19)+' UTC':'Configured';
-          for(const text of [claim.name,claim.source+(claim.alias_members?' · '+claim.alias_members+' configured entries':''),claim.interface||'',claim.mac||'',expiry]){row.insertCell().textContent=String(text);}
+          for(const text of [claim.name,claim.source+(claim.alias_members?' · '+claim.alias_members+' configured entries':''),claim.interface||'',claim.mac||'']){row.insertCell().textContent=String(text);}
+          const expiry=row.insertCell();
+          if(Number.isFinite(claim.expires)){
+            const time=document.createElement('time');time.dataset.utc=String(claim.expires);expiry.append(time);
+          }else expiry.textContent='Configured';
         }
         wrap.append(table);
         const empty=document.createElement('p');empty.className='da-search-empty';empty.hidden=true;empty.textContent='No rows match this table search.';
         const note=document.createElement('p');note.className='da-footnote';note.textContent='Current local metadata; DHCP names are client supplied and firewall aliases can group devices. Historical address ownership may differ. No automatic DNS lookups.';
         box.replaceChildren(wrap,empty,note);
+        setTimes(table);
+        restoreOrder(table);
+        if(focusedHeader!=null)table.tHead.rows[0].cells[focusedHeader]?.querySelector('button')?.focus({preventScroll:true});
         if(claims.some(claim=>claim.source==='Router interface')){const origin=document.createElement('p');origin.className='da-footnote';origin.textContent='Router interface address. Outbound logs can show translated traffic from other devices. This source alone does not identify the original LAN client or prove that pfSense generated the traffic.';box.append(origin);}
         if(data.at_capacity){const cap=document.createElement('p');cap.className='da-footnote';cap.textContent='Name metadata reached a collection limit; some labels may be absent.';box.append(cap);}
       }

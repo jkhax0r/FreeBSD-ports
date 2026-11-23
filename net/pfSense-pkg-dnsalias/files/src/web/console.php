@@ -12,6 +12,12 @@ function da_url($v, $changes=[]) {
     $q=[];
     foreach (['window','client','domain','tracker','destination','action','view','feed','before','asof','review','tag','hide_tag','rows'] as $k) { $q[$k]=$v[$k]??''; }
     foreach ($changes as $k=>$value) { if (array_key_exists($k,$q)) { $q[$k]=$value; } }
+    // Either way back to Domains restores the filter that opened the detail.
+    if ($q['view']==='domain') {
+        $q['list_domain']=($v['view']??'')==='domains'?($v['domain']??''):($v['list_domain']??'');
+    } elseif ($q['view']==='domains' && ($v['view']??'')==='domain' && !array_key_exists('domain',$changes)) {
+        $q['domain']=$v['list_domain']??'';
+    }
     return '?'.http_build_query(array_filter($q,fn($value)=>$value!==''), '', '&', PHP_QUERY_RFC3986);
 }
 function da_address_order($ip,$port=null) {
@@ -198,6 +204,7 @@ function da_render($v, $fragment=false) {
       </nav><main class="da-main">
         <form class="da-filters" method="get" action="dnsalias_status.php">
           <input type="hidden" name="view" value="<?=da_h($v['view'])?>">
+          <?php if (($v['list_domain']??'')!==''): ?><input type="hidden" name="list_domain" value="<?=da_h($v['list_domain'])?>"><?php endif; ?>
           <input type="hidden" name="rows" value="<?=da_h($v['rows']??'')?>" <?=empty($v['rows'])?'disabled':''?>>
           <?php if($v['view']==='client'): ?><input type="hidden" name="feed" value="<?=da_h($v['feed']??'all')?>"><?php endif; ?>
           <label>Event window<select name="window"><?php foreach ([15=>'15 minutes',60=>'1 hour',1440=>'24 hours'] as $n=>$label): ?><option value="<?=$n?>" <?=$v['window']===$n?'selected':''?>><?=$label?></option><?php endforeach; ?></select></label>
