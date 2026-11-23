@@ -28,6 +28,7 @@ import stat
 import sys
 import time
 
+from .auditworker import InitialAuditTimeout
 from .deployment import SETTINGS,DeploymentFingerprint,ProducerIdentity
 from .processwatch import ProcessLifetimeWatch
 from .sourceaudit import SourceAudit
@@ -73,6 +74,7 @@ class RuntimeDeploymentAudit:
         self.expected,self.producer=expected,producer
         self.sources,self.watch,self.control=sources,watch,control
         self.directory,self.uid,self.gid=credential_directory,credential_uid,credential_gid
+        self.initial_timeout_seen=False
         self.credential_id=credential_id;self.failed=None;self.last_evidence=None
         self.physical={k:v for k,v in self.snapshot['sources'].items() if k!='observer_configuration'}
         if any(sources.hashes.get(k)!=v for k,v in self.physical.items()):
@@ -111,6 +113,12 @@ class RuntimeDeploymentAudit:
                 try:
                     runtime=self.control.capture(self.watch,budget_seconds=min(.7,remaining()) if self.runtime_interval else remaining())
                 except RuntimeControlError as exc:
+                    if (self.runtime_interval and self.runtime_checked is None and not self.initial_timeout_seen
+                            and isinstance(exc.__cause__,TimeoutError)):
+                        # Discard partial reads. A second capture must verify the
+                        # same source, credentials, process and settings from scratch.
+                        self.initial_timeout_seen=True
+                        raise InitialAuditTimeout() from exc
                     temporary=('deadline' in str(exc) or isinstance(exc.__cause__,(TimeoutError,ConnectionRefusedError,ConnectionResetError)))
                     if not (self.runtime_interval and self.runtime_checked is not None and temporary):raise
                     # A known read-only timeout does not invalidate unchanged
@@ -129,10 +137,13 @@ class RuntimeDeploymentAudit:
                 'runtime_ms':runtime['duration_ms'] if runtime else 0,'runtime_requests':runtime['requests'] if runtime else 0,
                 'runtime_checked_monotonic':self.runtime_checked,'runtime_settings_interval_seconds':self.runtime_interval,
                 'runtime_verification_pending':self.runtime_pending,
+                'initial_read_timed_out':self.initial_timeout_seen,
                 'runtime_settings_age_seconds':started-self.runtime_checked,
                 'source_metadata_ms':before['duration_ms']+after['duration_ms'],
                 'source_content_bytes_read':0,'loaded_source_verified':False,'enforcement_qualified':False}
             return self.expected,self.producer
+        except InitialAuditTimeout:
+            raise
         except Exception as exc:
             self.failed=type(exc).__name__
             raise

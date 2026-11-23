@@ -84,8 +84,8 @@ try {
 if(($_GET['view']??'')==='aliases'){
     try{
         $da_aliases=dnsalias_policies_read();
-        // Only the list, editor, and members view display live PF membership.
-        if(isset($_GET['inspect_members'])||(!isset($_GET['inspect_alias'])&&($_GET['settings']??'')!=='1')){
+        // Only the list and members view display live PF membership.
+        if(isset($_GET['inspect_members'])||(!isset($_GET['inspect_alias'])&&!isset($_GET['edit_alias'])&&($_GET['settings']??'')!=='1')){
             $selected=isset($_GET['inspect_members'])&&is_string($_GET['inspect_members'])?$_GET['inspect_members']:null;
             $da_service=da_alias_display_status($da_aliases,$selected);
         }

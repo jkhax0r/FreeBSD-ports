@@ -194,6 +194,16 @@ function da_alias_rule_references(array $policies,array $index,$observed): void 
     da_table(['Decision','Recorded label / logged activity','Packets since reset','Bytes since reset','Rule scope'],$rows);
     echo '<p class="da-footnote">Up to50 entries shown. Only tracked main-ruleset entries with counters are included. These rules reference the table; their counters are for the entire rule, including any negated or broader matching scope. They are not exact alias hits, unique connections or HTTP requests. TCP/UDP entries may share a tracker. Client/domain filters do not narrow these counters. Anchors are not included; no references shown is not proof that the alias is unused.</p></div>';
 }
+function da_alias_editor(?array $edit,array $suggested_names=[]): void {
+    $action='dnsalias_status.php?view=aliases';
+    if($edit!==null)$action.='&edit_alias='.rawurlencode($edit['name']).'#da-alias-editor';
+    echo '<form class="da-alias-form" id="da-alias-editor" method="post" action="'.da_h($action).'"><h3>'.($edit?'Edit DNS alias':'Create DNS alias').'</h3>';
+    echo '<input type="hidden" name="alias_editor_mode" value="'.($edit?'edit':'create').'">';
+    if($edit)echo '<input type="hidden" name="alias_original_name" value="'.da_h($edit['name']).'">';
+    echo '<label>Alias name<input name="alias_name" pattern="(?:da_)?[a-z][a-z0-9_]{0,22}" maxlength="26" value="'.da_h($edit['name']??'').'" required '.($edit?'readonly':'').'></label><p class="da-help">'.($edit?'Firewall alias: <strong>'.da_h('da_'.$edit['name']).'</strong>.':'The <strong>da_</strong> prefix is added automatically. Enter <strong>example</strong> or <strong>da_example</strong> to create <strong>da_example</strong>.').'</p><label>DNS names and patterns<textarea name="alias_names" rows="4" maxlength="65536" required placeholder="example.com&#10;*.example.com">'.da_h(implode("\n",$edit['names']??$suggested_names)).'</textarea></label><p class="da-help">Up to 2,048 names or wildcard patterns per alias. *.example.com matches subdomains; add example.com separately for the base name.</p><label class="da-check"><input type="checkbox" name="alias_enabled" value="1" '.(!$edit||$edit['enabled']?'checked':'').'> Enable this alias</label><div class="da-form-actions"><button class="da-primary" name="alias_op" value="save">Save alias</button>';
+    if($edit)echo '<button class="da-delete" name="alias_op" value="delete" formnovalidate>Delete</button><a href="dnsalias_status.php?view=aliases">Cancel</a>';
+    echo '</div></form>';
+}
 function da_saved_aliases_render(array $policies,array $service,bool $can,string $error='',array $rule_snapshot=[],$rules_observed=null,?array $member_view=null,int $window=60): void {
     if(isset($_GET['inspect_members'])){da_alias_members_render($member_view,$can,($_GET['show_names']??'')==='1');return;}
     if(isset($_GET['inspect_alias'])){
@@ -209,6 +219,22 @@ function da_saved_aliases_render(array $policies,array $service,bool $can,string
         if($can)echo '<form class="da-alias-form" method="post" action="dnsalias_status.php?view=aliases&amp;settings=1"><label class="da-check"><input type="checkbox" name="service_enabled" value="1" '.(dnsalias_service_enabled()?'checked':'').'> Enable DNS Alias</label><p class="da-help">Run the service now and after reboot. Disabling empties DNS alias tables; ordinary firewall rules stay saved.</p><div class="da-form-actions"><button class="da-primary" name="alias_op" value="settings">Save settings</button><a href="status_services.php">Status → Services ↗</a></div></form>';
         echo '<p class="da-footnote">Use Status → Services for start, stop and restart. Alias names and patterns are managed separately.</p>';
         echo '<details class="da-domain-aliases"><summary>Preferences backup</summary><p>Download saved alias names and all domain reviews/tags. Firewall rules are included in pfSense’s configuration backup. Logs and learned IPs are excluded.</p><p><a href="dnsalias_status.php?preferences_export=1">Download preferences backup</a></p></details></div>';return;
+    }
+    if(isset($_GET['edit_alias'])){
+        echo '<p class="da-alias-back"><a href="dnsalias_status.php?view=aliases">← Back to DNS aliases</a></p><div class="da-panel">';
+        if($error!=='')echo '<p class="da-error">'.da_h($error).'</p>';
+        if(!$can){
+            echo '<p>Firewall rule editing privilege is required to edit DNS aliases.</p>';
+        }else{
+            $selected=null;
+            foreach($policies as $policy){
+                if($policy['name']===$_GET['edit_alias']){$selected=$policy;break;}
+            }
+            if($selected!==null)da_alias_editor($selected);
+            elseif($error==='')echo '<h2>DNS alias not found</h2>';
+        }
+        echo '</div>';
+        return;
     }
     $rule_index=da_alias_rule_index($rule_snapshot);
     $reference_snapshot=da_alias_rule_snapshot($rules_observed);
@@ -254,14 +280,7 @@ function da_saved_aliases_render(array $policies,array $service,bool $can,string
             foreach($policies as $p)echo '<option value="'.da_h($p['name']).'">'.da_h('da_'.$p['name']).($p['enabled']?'':' (disabled)').'</option>';
             echo '</select> <button class="da-primary" name="alias_op" value="add_name">Add domain</button><p class="da-footnote">The ordinary rules using this shared table determine which clients pass or block. This action adds no firewall rule.</p></form>';
         }
-        $edit=null;foreach($policies as $p)if($p['name']===($_GET['edit_alias']??''))$edit=$p;
-        $editor_names=$edit!==null?$edit['names']:($prefill['names']??[]);
-        echo '<form class="da-alias-form" id="da-alias-editor" method="post" action="dnsalias_status.php?view=aliases"><h3>'.($edit?'Edit DNS alias':'Create DNS alias').'</h3>';
-        echo '<input type="hidden" name="alias_editor_mode" value="'.($edit?'edit':'create').'">';
-        if($edit)echo '<input type="hidden" name="alias_original_name" value="'.da_h($edit['name']).'">';
-        echo '<label>Alias name<input name="alias_name" pattern="(?:da_)?[a-z][a-z0-9_]{0,22}" maxlength="26" value="'.da_h($edit['name']??'').'" required '.($edit?'readonly':'').'></label><p class="da-help">'.($edit?'Firewall alias: <strong>'.da_h('da_'.$edit['name']).'</strong>.':'The <strong>da_</strong> prefix is added automatically. Enter <strong>example</strong> or <strong>da_example</strong> to create <strong>da_example</strong>.').'</p><label>DNS names and patterns<textarea name="alias_names" rows="4" maxlength="65536" required placeholder="example.com&#10;*.example.com">'.da_h(implode("\n",$editor_names)).'</textarea></label><p class="da-help">Up to 2,048 names or wildcard patterns per alias. *.example.com matches subdomains; add example.com separately for the base name.</p><label class="da-check"><input type="checkbox" name="alias_enabled" value="1" '.(!$edit||$edit['enabled']?'checked':'').'> Enable this alias</label><div class="da-form-actions"><button class="da-primary" name="alias_op" value="save">Save alias</button>';
-        if($edit)echo '<button class="da-delete" name="alias_op" value="delete" formnovalidate>Delete</button><a href="dnsalias_status.php?view=aliases">Cancel</a>';
-        echo '</div></form>';
+        da_alias_editor(null,$prefill['names']??[]);
     }
     echo '<p class="da-footnote">No session expiry. Each DNS mapping keeps its remaining TTL; shared IPs stay until their final mapping expires. Any trusted client can populate a table. Choose source/VLAN, ports and pass/block in <a href="firewall_rules.php">Firewall → Rules</a>; destination is the alias above. A *.example.com pattern matches subdomains, not example.com itself. Shared CDN IPs cannot distinguish HTTPS hostnames. Existing firewall states normally survive membership removal.</p></div>';
 }

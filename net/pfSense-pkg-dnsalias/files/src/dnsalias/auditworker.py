@@ -21,6 +21,10 @@ import time
 from .deployment import DeploymentFingerprint,DeploymentGuard,ProducerIdentity
 
 
+class InitialAuditTimeout(TimeoutError):
+    """A persistent service's first settings read timed out before any receipt."""
+
+
 @dataclass(frozen=True)
 class AuditReceipt:
     sequence: int
@@ -41,6 +45,7 @@ class AuditWorker:
         self.capture=capture;self.interval=interval_seconds;self.budget=budget_seconds
         self.stop=threading.Event();self.lock=threading.Lock();self.thread=None
         self.latest=None;self.sequence=0;self.delivered=0;self.failure=None
+        self.initial_retry=False
 
     def start(self):
         if self.thread is not None or self.stop.is_set(): raise ValueError('worker cannot be restarted')
@@ -58,6 +63,15 @@ class AuditWorker:
                     or not isinstance(result[0],DeploymentFingerprint) or not isinstance(result[1],ProducerIdentity)):
                     raise ValueError('bounded immutable audit identities required')
                 deployment,producer=result
+            except InitialAuditTimeout:
+                elapsed=time.monotonic()-started
+                if self.sequence==0 and not self.initial_retry and 0<=elapsed<=self.budget:
+                    # No receipt has qualified this session. Retry one complete
+                    # capture on the worker, within the original enrollment window.
+                    self.initial_retry=True
+                    if self.stop.wait(.1):break
+                    continue
+                error='audit_initial_read_timed_out'
             except Exception as exc:
                 # Do not publish exception messages, which may contain file
                 # contents, credentials or an unbounded remote response.
