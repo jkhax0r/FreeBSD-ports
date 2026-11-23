@@ -197,6 +197,7 @@ function da_alias_rule_references(array $policies,array $index,$observed): void 
 function da_alias_editor(?array $edit,array $suggested_names=[]): void {
     $action='dnsalias_status.php?view=aliases';
     if($edit!==null)$action.='&edit_alias='.rawurlencode($edit['name']).'#da-alias-editor';
+    if($edit===null && $suggested_names)$action.='&block_name='.rawurlencode($suggested_names[0]);
     echo '<form class="da-alias-form" id="da-alias-editor" method="post" action="'.da_h($action).'"><h3>'.($edit?'Edit DNS alias':'Create DNS alias').'</h3>';
     echo '<input type="hidden" name="alias_editor_mode" value="'.($edit?'edit':'create').'">';
     if($edit)echo '<input type="hidden" name="alias_original_name" value="'.da_h($edit['name']).'">';
@@ -232,6 +233,29 @@ function da_saved_aliases_render(array $policies,array $service,bool $can,string
             }
             if($selected!==null)da_alias_editor($selected);
             elseif($error==='')echo '<h2>DNS alias not found</h2>';
+        }
+        echo '</div>';
+        return;
+    }
+    if(isset($_GET['block_name'])){
+        echo '<p class="da-alias-back"><a href="dnsalias_status.php?view=aliases">← Back to DNS aliases</a></p><div class="da-panel">';
+        if($error!=='')echo '<p class="da-error">'.da_h($error).'</p>';
+        $prefill=function_exists('da_policy_prefill')?da_policy_prefill($_GET):null;
+        if(!$can){
+            echo '<p>Firewall rule editing privilege is required to add a domain.</p>';
+        }elseif($prefill===null){
+            echo '<h2>Choose a valid DNS name to add</h2>';
+            da_alias_editor(null);
+        }else{
+            $domain=$prefill['names'][0];
+            if($policies){
+                $action='dnsalias_status.php?view=aliases&block_name='.rawurlencode($domain);
+                echo '<form class="da-alias-form" method="post" action="'.da_h($action).'"><h2>Add '.da_h($domain).' to an alias</h2><input type="hidden" name="alias_domain" value="'.da_h($domain).'"><label>Saved DNS alias<select name="alias_name">';
+                foreach($policies as $p)echo '<option value="'.da_h($p['name']).'">'.da_h('da_'.$p['name']).($p['enabled']?'':' (disabled)').'</option>';
+                echo '</select></label><div class="da-form-actions"><button class="da-primary" name="alias_op" value="add_name">Add domain</button></div></form>';
+                echo '<p class="da-footnote">Adding a domain updates the shared destination table used by existing firewall rules.</p>';
+            }
+            da_alias_editor(null,[$domain]);
         }
         echo '</div>';
         return;
@@ -274,13 +298,7 @@ function da_saved_aliases_render(array $policies,array $service,bool $can,string
     }
     echo '<p class="da-footnote">Rule references use the main ruleset snapshot from '.da_h(da_when($reference_snapshot['observed'])).'. '.(!$reference_snapshot['known']?'Reference snapshot unavailable. ':''). 'No references shown does not prove the alias is unused.</p>';
     if($can){
-        $prefill=function_exists('da_policy_prefill')?da_policy_prefill($_GET):null;
-        if($prefill!==null && $policies){
-            echo '<form method="post" action="dnsalias_status.php?view=aliases"><h3>Add '.da_h($prefill['names'][0]).' to an alias</h3><input type="hidden" name="alias_domain" value="'.da_h($prefill['names'][0]).'"><select name="alias_name">';
-            foreach($policies as $p)echo '<option value="'.da_h($p['name']).'">'.da_h('da_'.$p['name']).($p['enabled']?'':' (disabled)').'</option>';
-            echo '</select> <button class="da-primary" name="alias_op" value="add_name">Add domain</button><p class="da-footnote">The ordinary rules using this shared table determine which clients pass or block. This action adds no firewall rule.</p></form>';
-        }
-        da_alias_editor(null,$prefill['names']??[]);
+        da_alias_editor(null);
     }
     echo '<p class="da-footnote">No session expiry. Each DNS mapping keeps its remaining TTL; shared IPs stay until their final mapping expires. Any trusted client can populate a table. Choose source/VLAN, ports and pass/block in <a href="firewall_rules.php">Firewall → Rules</a>; destination is the alias above. A *.example.com pattern matches subdomains, not example.com itself. Shared CDN IPs cannot distinguish HTTPS hostnames. Existing firewall states normally survive membership removal.</p></div>';
 }

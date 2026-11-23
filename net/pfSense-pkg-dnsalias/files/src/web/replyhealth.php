@@ -15,6 +15,17 @@ function da_reply_health(array $status,float $now,string $availability='reported
     foreach(['offered','persisted','dropped','invalid','queued'] as $key){
         $value=$telemetry[$key]??null;$counts[$key]=is_int($value)&&$value>=0?$value:null;
     }
+    $excluded=$telemetry['excluded_by_reason']??null;
+    $reasons=null;
+    if(is_array($excluded)){
+        $reasons=[];
+        foreach(['request_deadline','helper_outcome','reply_metadata'] as $key){
+            $value=$excluded[$key]??null;
+            if(!is_int($value)||$value<0){$reasons=null;break;}
+            $reasons[$key]=$value;
+        }
+        if($reasons!==null && array_sum($reasons)!==$counts['invalid'])$reasons=null;
+    }
     $loss=$status['reply_loss']['dropped']??null;
     $counts['resolver_loss']=is_int($loss)&&$loss>=0?$loss:null;
     $warning=null;
@@ -31,7 +42,7 @@ function da_reply_health(array $status,float $now,string $availability='reported
         elseif(($counts['dropped']??0)>0||($counts['invalid']??0)>0)$warning='Some DNS reply observations were dropped or excluded from trusted statistics. See the feed counters in Coverage.';
     }else $label=match($state){'stopped'=>'Reply feed reports stopped','starting'=>'Reply feed reports starting','stopping'=>'Reply feed reports stopping',default=>'Reply feed not reporting running'};
     return ['label'=>$label,'warning'=>$warning,'observed'=>$valid?$stamp:null,'fresh'=>$fresh,'reported_running'=>$running,
-        'storage_reported_active'=>$storage,'error'=>$error,'counts'=>$counts];
+        'storage_reported_active'=>$storage,'error'=>$error,'counts'=>$counts,'excluded_by_reason'=>$reasons];
 }
 function da_reply_health_read(string $directory,float $now): array {
     $path=$directory.'/alias-status.json';clearstatcache(true,$path);clearstatcache(true,$directory);$before=@lstat($path);
@@ -57,5 +68,10 @@ function da_reply_health_render(array $health): void {
     echo '<div class="da-panel" id="da-reply-health"><div class="da-panel-title"><h2>DNS reply feed and storage</h2><span class="da-pill da-neutral">'.da_h($health['label']).'</span></div>';
     $c=$health['counts'];
     da_table(['Reported offered','Confirmed stored','Storage drops','Excluded / unqualified','Queued','Resolver-reported misses'],[[da_num($c['offered']),da_num($c['persisted']),da_num($c['dropped']),da_num($c['invalid']),da_num($c['queued']),da_num($c['resolver_loss'])]]);
+    $reasons=$health['excluded_by_reason']??null;
+    if(is_array($reasons)&&($c['invalid']??0)>0){
+        da_table(['Helper deadline expired','Other helper refusal','Invalid reply metadata'],[[
+            da_num($reasons['request_deadline']),da_num($reasons['helper_outcome']),da_num($reasons['reply_metadata'])]]);
+    }
     echo '<p class="da-footnote">Last feed report '.da_h(da_when($health['observed'])).'. Read when this page loads; no extra collection or process check. Counters are cumulative for the reported feed session, not the selected time window or retained-row totals. They cover all observed clients, independent of page filters. A storage error can leave a write outcome unknown; it is not automatically replayed. DNS queries, client delivery and firewall decisions are separate evidence.</p></div>';
 }

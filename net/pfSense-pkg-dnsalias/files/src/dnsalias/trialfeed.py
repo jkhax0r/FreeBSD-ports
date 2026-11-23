@@ -51,7 +51,8 @@ class FeedTelemetry:
         self.path,self.session,self.profile=path,session,profile_id
         self.detail_profile=ReplyProfile('1.26.1',profile_id,excluded_addresses)
         self.queue=queue.Queue(maxsize=128);self.stop=threading.Event()
-        self.counters={'offered':0,'persisted':0,'dropped':0,'invalid':0,'busy_batches':0}
+        self.counters={'offered':0,'persisted':0,'dropped':0,'busy_batches':0}
+        self.exclusions={'request_deadline':0,'helper_outcome':0,'reply_metadata':0}
         self.error=None
         self.thread=threading.Thread(target=self._run,name='dnsalias-feed-statistics',daemon=True)
         self.thread.start()
@@ -111,7 +112,9 @@ class FeedTelemetry:
                         # visible without being reported as an applied mapping.
                         deferred=(item['ack']['status']=='helper_error' and item.get('reason')=='reload_busy')
                         if item['ack']['status'] not in ('applied','ignored') and not deferred:
-                            self.counters['invalid']+=1;continue
+                            reason='request_deadline' if item['ack']['status']=='helper_error' and item.get('reason')=='request_budget_expired' else 'helper_outcome'
+                            self.exclusions[reason]+=1
+                            continue
                         event=summarize(reply,client=reply['client'],profile_id=self.profile)
                         try:event.update(describe(reply,profile=self.detail_profile))
                         except (KeyError,ValueError,TypeError):
@@ -122,7 +125,7 @@ class FeedTelemetry:
                             table_use=self.table_use,firewall_decision_observed=False,
                             mapping_coverage_incomplete=deferred or bool(self.counters['dropped']))
                         events.append(event)
-                    except (KeyError,ValueError,TypeError):self.counters['invalid']+=1
+                    except (KeyError,ValueError,TypeError):self.exclusions['reply_metadata']+=1
                 if events:
                     try:self.counters['persisted']+=store.insert(events)
                     except sqlite3.OperationalError as exc:
@@ -142,7 +145,9 @@ class FeedTelemetry:
         return not self.thread.is_alive()
 
     def status(self):
-        return dict(self.counters)|{'error':self.error,'queued':self.queue.qsize(),
+        excluded=dict(self.exclusions)
+        return dict(self.counters)|{'invalid':sum(excluded.values()),'excluded_by_reason':excluded,
+            'error':self.error,'queued':self.queue.qsize(),
             'thread_alive':self.thread.is_alive(),'dns_waits_for_storage':False}
 
 
