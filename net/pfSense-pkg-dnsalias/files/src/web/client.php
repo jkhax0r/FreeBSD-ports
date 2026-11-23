@@ -210,6 +210,23 @@
   // Read-only client filters update only this panel. Native links remain the
   // fallback, including opening a new tab. Late responses cannot win a race.
   let timelineRequest=null,pendingTimeline=null,timelineSequence=0,displayedTimeline=location.pathname+location.search;
+  let identityRevision=0;
+  const observedNames=element=>Number(element.dataset.identityObserved)||0;
+  const mergeClientNames=(old,next,nextRoot,requestRevision)=>{
+    const title=next.querySelector('h2[data-client-ip]');
+    if(!title||!title.dataset.clientIp)return;
+    if(requestRevision!==identityRevision&&observedNames(nextRoot)<observedNames(root)){
+      // A newer name lookup finished while this feed request was in flight.
+      const prior=old.querySelector('[data-client-claims]'),incoming=next.querySelector('[data-client-claims]');
+      const priorTitle=old.querySelector('h2[data-client-ip]');
+      if(prior&&incoming)incoming.replaceWith(prior.cloneNode(true));
+      if(priorTitle)title.textContent=priorTitle.textContent;
+    }else root.dataset.identityObserved=String(observedNames(nextRoot));
+    const label=title.textContent;
+    for(const node of root.querySelectorAll('[data-client-ip]')){
+      if(!old.contains(node)&&node.dataset.clientIp===title.dataset.clientIp&&node.textContent!==label)node.textContent=label;
+    }
+  };
   const timelineUrl=(href)=>{
     const u=new URL(href,location.href),panel=root.querySelector('#da-client');
     if(!panel||u.origin!==location.origin||u.pathname!==location.pathname||u.searchParams.get('view')!=='client'||u.searchParams.get('client')!==panel.dataset.client)return null;
@@ -217,7 +234,7 @@
   };
   const loadTimeline=async(href,push=true)=>{
     const url=timelineUrl(href);if(!url)return false;
-    const target=url.pathname+url.search;
+    const target=url.pathname+url.search,requestRevision=identityRevision;
     if(timelineRequest&&pendingTimeline===target)return true;
     const sequence=++timelineSequence;timelineRequest?.abort();
     const abort=new AbortController();timelineRequest=abort;pendingTimeline=target;
@@ -235,9 +252,9 @@
       // The user can scroll or move focus while the request is in flight.
       const scrollX=window.scrollX,scrollY=window.scrollY,oldFocus=document.activeElement;
       if(push&&target!==location.pathname+location.search)history.pushState({dnsAliasClientFeed:true},'',url);
+      mergeClientNames(old,next,nextRoot,requestRevision);
       setTimes(next);
-      const nextTable=next.querySelector('.da-client-timeline');
-      if(nextTable)restoreOrder(nextTable);
+      next.querySelectorAll('table.da-table').forEach(restoreOrder);
       next.classList.add('da-visible');
       const index=panels.indexOf(old);old.replaceWith(next);if(index>=0)panels[index]=next;
       for(const key of ['statusTime','statusAge','running'])root.dataset[key]=nextRoot.dataset[key];
@@ -327,13 +344,20 @@
       if(data.format!=='dnsalias-client-names-1'||!data.clients||typeof data.clients!=='object')throw Error('Invalid metadata');
       for(const node of root.querySelectorAll('[data-client-ip]')){
         const ip=node.dataset.clientIp,claims=data.clients[ip];
+        if(!ip||(data.client&&data.client!==ip)||node.hasAttribute('data-client-loopback'))continue;
+        let text=ip;
         if(Array.isArray(claims)&&claims.length&&typeof claims[0].name==='string'){
           const claim=claims[0],iface=claim.source==='Router interface'&&typeof claim.interface==='string'&&claim.interface?' · '+claim.interface:'';
-          node.textContent=claim.name+iface+' · '+ip;
+          text=claim.name+iface+' · '+ip;
+        }
+        if(node.textContent!==text){
+          node.textContent=text;
           const row=node.closest('[data-row]');if(row)searchText.delete(row);
         }
       }
-      const box=root.querySelector('#da-client-identity'),claims=box&&data.clients[box.dataset.client];
+      const panel=root.querySelector('#da-client-identity');
+      const box=panel&&(!data.client||data.client===panel.dataset.client)?panel.querySelector('[data-client-claims]'):null;
+      const claims=box&&data.clients[panel.dataset.client];
       if(box&&Array.isArray(claims)&&claims.length){
         const focusedHeader=box.contains(document.activeElement)?document.activeElement.closest('th')?.cellIndex:null;
         const wrap=document.createElement('div');wrap.className='da-table-wrap';
@@ -362,19 +386,30 @@
         restoreOrder(table);
         if(focusedHeader!=null)table.tHead.rows[0].cells[focusedHeader]?.querySelector('button')?.focus({preventScroll:true});
         if(claims.some(claim=>claim.source==='Router interface')){const origin=document.createElement('p');origin.className='da-footnote';origin.textContent='Router interface address. Outbound logs can show translated traffic from other devices. This source alone does not identify the original LAN client or prove that pfSense generated the traffic.';box.append(origin);}
-        if(data.at_capacity){const cap=document.createElement('p');cap.className='da-footnote';cap.textContent='Name metadata reached a collection limit; some labels may be absent.';box.append(cap);}
+      }else if(box){
+        const note=document.createElement('p');note.className='da-footnote';
+        note.textContent=root.querySelector('#da-client h2[data-client-loopback]')?'Router loopback / unknown origin. The originating process or forwarded client may be unavailable.':'No recent local name metadata available for this address.';
+        box.replaceChildren(note);
       }
-      applySearch();identityNote.textContent='Client names updated';
+      if(box&&data.at_capacity){const cap=document.createElement('p');cap.className='da-footnote';cap.textContent='Name metadata reached a collection limit; some labels may be absent.';box.append(cap);}
+      root.dataset.identityObserved=String(data.observed_utc);identityRevision++;
+      if(search?.value)applySearch();
+      identityNote.textContent='Client names updated';
     };
     const prefetch=async attempt=>{
       if(document.hidden){identityNote.textContent='Client names refresh requested';return;}
       const abort=new AbortController(),limit=setTimeout(()=>abort.abort(),2000);
       try {
+        const previous=observedNames(root);
         const url=new URL(location.href);url.search='?client_identity=1';url.hash='';
+        const client=root.querySelector('#da-client-identity')?.dataset.client;
+        if(client)url.searchParams.set('client',client);
         const response=await fetch(url,{credentials:'same-origin',cache:'no-store',signal:abort.signal});
         if(!response.ok||!(response.headers.get('Content-Type')||'').includes('application/json'))throw Error('Metadata unavailable');
         const data=await response.json();
-        if(Number(data.observed_utc)>Number(root.dataset.identityObserved)){updateNames(data);return;}
+        if(client&&data.client!==undefined&&data.client!==client)throw Error('Unexpected client scope');
+        if(Number(data.observed_utc)>observedNames(root)){updateNames(data);return;}
+        if(observedNames(root)>previous){identityNote.textContent='Client names updated';return;}
         if(attempt<3){setTimeout(()=>prefetch(attempt+1),700);return;}
         identityNote.textContent='Client names pending; refresh later';
       }catch(_){identityNote.textContent='Client names unavailable; cached labels retained';}

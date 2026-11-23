@@ -14,7 +14,11 @@ catch(Throwable $error){
 require_once("/usr/local/libexec/dnsalias/web/view.php");
 if (($_GET['client_identity']??null)==='1' && ($_SERVER['REQUEST_METHOD']??'GET')==='GET') {
     header('Content-Type: application/json; charset=utf-8');header('Cache-Control: no-store');
-    echo json_encode(da_identity_payload(da_identity_snapshot('/var/db/dnsalias'),time()),JSON_HEX_TAG|JSON_HEX_AMP|JSON_HEX_APOS|JSON_HEX_QUOT|JSON_INVALID_UTF8_SUBSTITUTE);
+    $selected=$_GET['client']??null;
+    if($selected!==null&&(!is_string($selected)||!filter_var($selected,FILTER_VALIDATE_IP))){
+        http_response_code(400);echo '{"error":"Invalid client address"}';exit;
+    }
+    echo json_encode(da_identity_payload(da_identity_snapshot('/var/db/dnsalias'),time(),$selected),JSON_HEX_TAG|JSON_HEX_AMP|JSON_HEX_APOS|JSON_HEX_QUOT|JSON_INVALID_UTF8_SUBSTITUTE);
     exit;
 }
 require_once("/usr/local/libexec/dnsalias/web/control.php");

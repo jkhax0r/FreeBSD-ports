@@ -603,12 +603,28 @@ def stop(root=ROOT,data=DATA):
     verify(root,data)
     pid=owned_process(root,data)
     if pid is None: return {"stopped":True,"was_running":False}
-    os.kill(pid,signal.SIGTERM)
-    for _ in range(50):
-        if owned_process(root,data) is None:
-            return {"stopped":True,"pid":pid}
-        time.sleep(0.1)
-    raise RuntimeError("collector did not stop; no force kill attempted")
+    from dnsalias.processwatch import ProcessLifetimeWatch
+    # A terminated collector can keep its PID until its parent reaps it.
+    # Match the command again after enrolling, then wait on this process.
+    with ProcessLifetimeWatch(pid) as watch:
+        if owned_process(root,data)!=pid or not watch.alive():
+            raise RuntimeError("collector changed before stop")
+        os.kill(pid,signal.SIGTERM)
+        deadline=time.monotonic()+5
+        while watch.alive():
+            if time.monotonic()>=deadline:
+                raise RuntimeError("collector did not stop; no force kill attempted")
+            time.sleep(0.1)
+        if watch.state!='exited':
+            raise RuntimeError("collector exit could not be verified")
+    try:
+        recorded=(data/"collector.pid").read_text().strip()
+    except FileNotFoundError:
+        recorded=None
+    if recorded is not None and recorded!=str(pid):
+        raise RuntimeError("collector PID record changed during stop")
+    return {"stopped":True,"pid":pid}
+
 
 
 def ui_marker(root, webpage, body):

@@ -210,7 +210,7 @@ function da_labels_clause(array $v,array &$params): string {
     $sql='';$status="COALESCE((SELECT l.review FROM da_labels.domain_labels l WHERE l.domain=events.domain),'')";
     if($review==='hide_good')$sql.=" AND $status<>'good'";
     elseif($review==='unreviewed')$sql.=" AND $status=''";
-    elseif($review!==''){$sql.=" AND $status=:label_review";$params[':label_review']=$review;}
+    elseif($review!==''){$sql.=' AND EXISTS(SELECT 1 FROM da_labels.domain_labels l WHERE l.review=:label_review AND l.domain=events.domain)';$params[':label_review']=$review;}
     if($tag!==''){$sql.=' AND EXISTS(SELECT 1 FROM da_labels.domain_tags t WHERE t.domain=events.domain AND t.tag=:label_tag)';$params[':label_tag']=$tag;}
     if($hide!==''){$sql.=' AND NOT EXISTS(SELECT 1 FROM da_labels.domain_tags t WHERE t.domain=events.domain AND t.tag=:label_hide_tag)';$params[':label_hide_tag']=$hide;}
     return $sql;

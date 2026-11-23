@@ -124,3 +124,62 @@ class RestoreReadiness(unittest.TestCase):
         for options in ({'budget_seconds': 9}, {'budget_seconds': 13, 'persistent': True}):
             with self.assertRaises(ValueError):
                 self.match(timeout, **options)
+
+
+class CollectorStopTests(unittest.TestCase):
+    def setUp(self):
+        from contextlib import ExitStack
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+
+        self.stack = self.enterContext(ExitStack())
+        self.data = Path(self.stack.enter_context(TemporaryDirectory()))
+        self.marker = self.data / 'collector.pid'
+        self.marker.write_text('123')
+        self.stack.enter_context(patch('manage.verify'))
+        self.lookup = self.stack.enter_context(patch('manage.owned_process', return_value=123))
+        self.kill = self.stack.enter_context(patch('manage.os.kill'))
+        watcher = self.stack.enter_context(patch('dnsalias.processwatch.ProcessLifetimeWatch'))
+        self.watch = watcher.return_value.__enter__.return_value
+        self.watch.alive.side_effect = [True, False]
+        self.watch.state = 'exited'
+
+    def stop(self):
+        import manage
+        return manage.stop.__wrapped__(self.data / 'source', self.data)
+
+    def test_exit_qualifies_before_parent_reaps_pid(self):
+        import signal
+        self.assertTrue(self.stop()['stopped'])
+        self.assertEqual(self.lookup.call_count, 2)
+        self.kill.assert_called_once_with(123, signal.SIGTERM)
+        self.assertEqual(self.marker.read_text(), '123')
+
+    def test_changed_identity_before_signal(self):
+        self.lookup.side_effect = [123, 124]
+        with self.assertRaisesRegex(RuntimeError, 'changed before stop'):
+            self.stop()
+        self.kill.assert_not_called()
+
+    def test_exec_or_failed_watch_does_not_confirm_exit(self):
+        for state in ('changed', 'failed'):
+            with self.subTest(state=state):
+                self.watch.state = state
+                self.watch.alive.side_effect = [True, False]
+                with self.assertRaisesRegex(RuntimeError, 'could not be verified'):
+                    self.stop()
+        self.assertEqual(self.kill.call_count, 2)
+
+    def test_replacement_pid_record_is_preserved(self):
+        self.kill.side_effect = lambda *args: self.marker.write_text('124')
+        with self.assertRaisesRegex(RuntimeError, 'PID record changed'):
+            self.stop()
+        self.assertEqual(self.marker.read_text(), '124')
+        self.kill.assert_called_once()
+
+    def test_timeout_leaves_worker_and_pid_record_alone(self):
+        self.watch.alive.side_effect = [True, True]
+        with patch('manage.time.monotonic', side_effect=[0.0, 5.1]), self.assertRaisesRegex(RuntimeError, 'no force kill'):
+            self.stop()
+        self.kill.assert_called_once()
+        self.assertEqual(self.marker.read_text(), '123')

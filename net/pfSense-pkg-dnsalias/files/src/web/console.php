@@ -43,7 +43,7 @@ function da_context_client($v) {
     if (($v['client']??'')==='') { echo '<span class="da-muted">All observed clients</span>';return; }
     $clear=da_url($v,['client'=>'','view'=>$v['view']==='client'?'overview':$v['view'],'before'=>'','asof'=>'','feed'=>'all']);
     $applied=!in_array($v['view'],['rules','aliases','coverage'],true);
-    echo '<span class="da-scope-filter"><strong>'.($applied?'Client filter:':'Client selection:').'</strong> <span data-client-ip="'.da_h($v['client']).'">'.da_h(da_client_label($v,$v['client'])).'</span>'.($applied?'':' <small>(not applied here)</small>').' <a href="'.da_h($clear).'" aria-label="Clear client filter">Clear ×</a></span>';
+    echo '<span class="da-scope-filter"><strong>'.($applied?'Client filter:':'Client selection:').'</strong> <span '.da_client_name_attributes($v['client']).'>'.da_h(da_client_label($v,$v['client'])).'</span>'.($applied?'':' <small>(not applied here)</small>').' <a href="'.da_h($clear).'" aria-label="Clear client filter">Clear ×</a></span>';
 }
 function da_num($n) { return ['text'=>da_number($n),'order'=>is_numeric($n)?$n:-1]; }
 function da_bytes($n) {
@@ -93,7 +93,7 @@ function da_table($headers,$rows,$class='',$compact_events=false,$default_desc=n
             echo '>';
             if (isset($c['destination_context'])) { da_destination_render($c); }
             elseif (isset($c['domain_label'])) { da_labels_cell_render($c); }
-            elseif (isset($c['url'])) { echo '<a href="'.da_h($c['url']).'"'.(isset($c['client_ip'])?' data-client-ip="'.da_h($c['client_ip']).'"':'').'>'.da_h($c['text']).'</a>'; }
+            elseif (isset($c['url'])) { echo '<a href="'.da_h($c['url']).'"'.(isset($c['client_ip'])?' '.da_client_name_attributes($c['client_ip']):'').'>'.da_h($c['text']).'</a>'; }
             elseif (isset($c['badge'])) { echo '<span class="da-pill da-'.(in_array($c['badge'],['pass','block'],true)?$c['badge']:'neutral').'">'.da_h($c['text']).'</span>'; }
             elseif (isset($c['detail'])) { echo '<button type="button" class="da-detail" ' . da_event_detail_attr($c['detail'],$compact_events,$first_detail) . '>'.da_h($c['label']??'Details').' <span aria-hidden="true">↗</span></button>'; }
             elseif (isset($c['review'])) {
@@ -117,7 +117,7 @@ function da_rank($v,$rows,$field,$target,$metric) {
     if (!$rows) { echo '<p class="da-empty">No matching observations yet.</p>'; }
     foreach (array_slice($rows,0,6) as $r) {
         $link=da_link($v,$r[$field],[$target=>$r[$field],'view'=>$target==='client'?'client':'domain']);
-        echo '<a class="da-rank" href="'.da_h($link['url']).'"><span'.($target==='client'?' data-client-ip="'.da_h($r[$field]).'"':'').'>'.da_h($target==='client'?da_client_label($v,$r[$field]):$r[$field]).'</span><strong>'.da_h(da_number($r[$metric])).'</strong><i style="width:'.round(100*$r[$metric]/$max,2).'%"></i></a>';
+        echo '<a class="da-rank" href="'.da_h($link['url']).'"><span'.($target==='client'?' '.da_client_name_attributes($r[$field]):'').'>'.da_h($target==='client'?da_client_label($v,$r[$field]):$r[$field]).'</span><strong>'.da_h(da_number($r[$metric])).'</strong><i style="width:'.round(100*$r[$metric]/$max,2).'%"></i></a>';
     }
 }
 function da_chart($v,$kind) {

@@ -25,12 +25,16 @@ function da_queue_identity($directory,$status,$now) {
     try{$file=@fopen($path,'x');if($file===false){return false;}fclose($file);return true;}
     finally{umask($mask);}
 }
-function da_identity_payload($status,$now) {
+function da_identity_payload($status,$now,?string $selected=null) {
     $v=['now'=>$now,'status'=>$status];$clients=[];
-    foreach(array_slice($status['client_identity']['clients']??[],0,512,true) as $client=>$unused){
+    $observed=array_slice($status['client_identity']['clients']??[],0,512,true);
+    if($selected!==null)$observed=array_intersect_key($observed,[$selected=>true]);
+    foreach($observed as $client=>$unused){
         if(filter_var($client,FILTER_VALIDATE_IP)){$claims=da_client_claims($v,$client);if($claims){$clients[$client]=$claims;}}
     }
-    return ['format'=>'dnsalias-client-names-1','observed_utc'=>$status['client_identity']['observed_utc']??0,'clients'=>(object)$clients,'at_capacity'=>$status['client_identity']['at_capacity']??false];
+    $payload=['format'=>'dnsalias-client-names-1','observed_utc'=>$status['client_identity']['observed_utc']??0,'clients'=>(object)$clients,'at_capacity'=>$status['client_identity']['at_capacity']??false];
+    if($selected!==null)$payload['client']=$selected;
+    return $payload;
 }
 function da_loopback($client) {
     $b=@inet_pton($client);
@@ -44,6 +48,9 @@ function da_logged_answer($b) {
         return 'Service parameters unavailable in text log';
     }
     return $answer;
+}
+function da_client_name_attributes(string $ip): string {
+    return 'data-client-ip="'.da_h($ip).'"'.(da_loopback($ip)?' data-client-loopback':'');
 }
 function da_client_basis($r) {
     if (!da_loopback($r['client']??'')) { return 'Logged source address; original device may be hidden by forwarding/NAT'; }
@@ -72,11 +79,13 @@ function da_client_claims($v,$client) {
 }
 function da_client_identity_render($v,$client) {
     $claims=da_client_claims($v,$client);$rows=[];
+    echo '<div data-client-claims>';
     foreach($claims as $r) { $rows[]=[$r['name'],$r['source'].(isset($r['alias_members'])?' · '.da_number($r['alias_members']).' configured entries':''),$r['interface']??'',$r['mac']??'',isset($r['expires'])?da_time($r['expires']):'Configured']; }
     if ($rows) { da_table(['Name / label','Source','Interface','MAC','Lease expiry'],$rows,'da-identity-table'); }
     else { echo '<p class="da-footnote">'.da_h(da_loopback($client)?'Router loopback / unknown origin. Query records prove a loopback peer; pfBlockerNG reply logs may also use this address when the client is unavailable.':'No recent local name metadata available for this address.').'</p>'; }
     if($rows){echo '<p class="da-footnote">Current local metadata; DHCP names are client supplied and firewall aliases can group multiple devices. Address reuse or forwarding can change the device behind historical events. No automatic reverse-DNS requests.</p>';}
     if(array_filter($claims,fn($r)=>$r['source']==='Router interface')) { echo '<p class="da-footnote"><strong>Router interface address.</strong> Outbound logs can show translated traffic from other devices. This source alone does not identify the original LAN client or prove that pfSense generated the traffic.</p>'; }
     if(($v['status']['client_identity']['at_capacity']??false)===true){echo '<p class="da-footnote">Name metadata reached a collection limit; some labels may be absent.</p>';}
+    echo '</div>';
     if($client==='127.0.0.1') { echo '<p class="da-footnote"><strong>'.da_h(da_number($v['counts']['dns']??0)).' query records with a verified loopback peer</strong> · '.da_h(da_number(($v['dns_outcomes']['replies']??0)+($v['dns_outcomes']['dnsbl']??0))).' pfBlockerNG reply/policy records with ambiguous origin. These sources can overlap; the originating process is not logged.</p>'; }
 }
