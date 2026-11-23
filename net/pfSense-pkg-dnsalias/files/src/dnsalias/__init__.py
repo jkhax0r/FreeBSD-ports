@@ -1,2 +1,2 @@
 """DNS Alias: independent Unbound/PF integration, initially observation only."""
-__version__ = "0.2.49"
+__version__ = "0.2.50"

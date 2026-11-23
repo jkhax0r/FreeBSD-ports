@@ -51,6 +51,17 @@ function da_rows($db, $sql, $values) {
     $stmt->close();
     return $rows;
 }
+// Wide reports can group from the existing partial indexes without reading
+// the JSON for every event in the time index. A narrow time range is cheaper
+// to seek. Probe at most 2,048 time-index entries in the same read snapshot.
+function da_dense_report_window($db, $range, $params) {
+    $sql = "SELECT CASE WHEN (SELECT count(*) FROM sqlite_master
+            WHERE type='index' AND tbl_name='events' AND name IN
+            ('event_time','event_client_web','event_client_dnsevidence','event_destination_web','event_domain_evidence')) = 5
+            THEN EXISTS (SELECT 1 FROM events WHERE " . $range . " LIMIT 1 OFFSET 2047)
+            ELSE 0 END AS dense";
+    return (bool)da_rows($db, $sql, $params)[0]['dense'];
+}
 function da_load($directory, $query, $now) {
     $v = ['now'=>$now, 'status'=>[], 'errors'=>[], 'dns'=>[], 'dns_top'=>[], 'traffic'=>[], 'flows'=>[], 'counts'=>[], 'rules'=>[], 'hourly'=>[], 'hourly_ready'=>false, 'hourly_coverage'=>[], 'clients'=>[], 'domains'=>[], 'destinations'=>[], 'blocks'=>[], 'client_events'=>[], 'next_cursor'=>null, 'feed'=>'all', 'before'=>'', 'asof'=>''];
     $v['data_directory']=$directory;
@@ -130,11 +141,26 @@ function da_load($directory, $query, $now) {
         $dnswhere = $where . " AND kind = 'dns_query'";
         $dnsparams = $params;
         if ($v['domain'] !== '') { $dnswhere .= ' AND instr(lower(domain), :domain) > 0'; $dnsparams[':domain'] = $v['domain']; }
-        $webwhere = $where . " AND kind = 'firewall_packet' AND json_extract(body,'$.destination_port') IN (80,443) AND json_extract(body,'$.protocol') IN ('tcp','udp')";
+        $webPredicate = " AND kind = 'firewall_packet' AND json_extract(body,'$.destination_port') IN (80,443) AND json_extract(body,'$.protocol') IN ('tcp','udp')";
+        $webwhere = $where . $webPredicate;
         $webparams = $params;
         if ($v['tracker'] !== '') { $webwhere .= ' AND tracker = :tracker'; $webparams[':tracker'] = $v['tracker']; }
         if ($v['destination'] !== '') { $webwhere .= " AND json_extract(body,'$.destination') = :destination"; $webparams[':destination'] = $v['destination']; }
         if ($v['action'] !== '') { $webwhere .= ' AND action = :action'; $webparams[':action'] = $v['action']; }
+        $summaryWindow = $where;
+        $dnsSummary = $dnswhere;
+        $webSummary = $webwhere;
+        // The two time bounds are the only parameters on an unscoped report.
+        $dense = in_array($v['view'], ['overview','clients','domains','activity','blocks'], true)
+            && count($dnsparams) === 2 && count($webparams) === 2 && !da_labels_filter_active($v)
+            && da_dense_report_window($db, $where, $params);
+        if ($dense) {
+            // IS TRUE preserves both bound comparisons. SQLite can pick a
+            // grouping index instead of seeking through the same wide interval.
+            $summaryWindow = '(' . $where . ') IS TRUE';
+            $dnsSummary = $summaryWindow . " AND kind = 'dns_query'";
+            $webSummary = $summaryWindow . $webPredicate;
+        }
         if ($v['view']==='domains') {
             $dnswhere.=da_labels_clause($v,$dnsparams);
             $v['dns'] = da_rows($db, 'SELECT time,client,domain,body FROM events WHERE '.$dnswhere.' ORDER BY time DESC,id DESC LIMIT 100', $dnsparams);
@@ -142,22 +168,24 @@ function da_load($directory, $query, $now) {
         if (in_array($v['view'],['overview','domains'],true)) {
             $limit=$v['view']==='overview'?6:100;
             $rankWhere=$dnswhere;$rankParams=$dnsparams;
+            // Include the declaring predicate so the domain index can cover the ranking.
+            if ($dense) $rankWhere = $dnsSummary . " AND kind IN ('dns_query','dns_reply_log','dns_policy_log','dns_reply')";
             if($v['view']==='overview')$rankWhere.=da_labels_clause($v,$rankParams);
             $v['domains'] = da_rows($db, 'SELECT domain,count(*) AS n,count(DISTINCT client) AS clients,max(time) AS latest FROM events WHERE '.$rankWhere.' GROUP BY domain ORDER BY n DESC,domain LIMIT '.$limit, $rankParams);
         }
         if (in_array($v['view'],['overview','clients'],true)) {
         $clientRows = []; $v['counts']['dns']=0;
-        foreach (da_rows($db, 'SELECT client,count(*) AS dns,max(time) AS latest FROM events WHERE '.$dnswhere.' GROUP BY client', $dnsparams) as $r) {
+        foreach (da_rows($db, 'SELECT client,count(*) AS dns,max(time) AS latest FROM events WHERE '.$dnsSummary.' GROUP BY client', $dnsparams) as $r) {
             $clientRows[$r['client']] = ['client'=>$r['client'],'dns'=>$r['dns'],'pass'=>0,'block'=>0,'latest'=>$r['latest']];
             $v['counts']['dns']+=$r['dns'];
         }
-        foreach (da_rows($db, 'SELECT client,action,count(*) AS n,max(time) AS latest FROM events WHERE '.$webwhere." AND action IN ('pass','block') GROUP BY client,action", $webparams) as $r) {
+        foreach (da_rows($db, 'SELECT client,action,count(*) AS n,max(time) AS latest FROM events WHERE '.$webSummary." AND action IN ('pass','block') GROUP BY client,action", $webparams) as $r) {
             if (!isset($clientRows[$r['client']])) { $clientRows[$r['client']] = ['client'=>$r['client'],'dns'=>0,'pass'=>0,'block'=>0,'latest'=>$r['latest']]; }
             $clientRows[$r['client']][$r['action']] = $r['n'];
             $clientRows[$r['client']]['latest'] = max($clientRows[$r['client']]['latest'], $r['latest']);
             $v['counts'][$r['action']]=($v['counts'][$r['action']]??0)+$r['n'];
         }
-        $evidenceWhere=$where." AND kind IN ('dns_reply_log','dns_policy_log','dns_reply')";$evidenceParams=$params;
+        $evidenceWhere=$summaryWindow." AND kind IN ('dns_reply_log','dns_policy_log','dns_reply')";$evidenceParams=$params;
         if($v['domain']!==''){$evidenceWhere.=' AND instr(lower(domain),:domain)>0';$evidenceParams[':domain']=$v['domain'];}
         foreach(da_rows($db,'SELECT client,count(*) AS n,max(time) AS latest FROM events WHERE '.$evidenceWhere.' GROUP BY client',$evidenceParams) as $r){
             if(!isset($clientRows[$r['client']])){$clientRows[$r['client']]=['client'=>$r['client'],'dns'=>0,'pass'=>0,'block'=>0,'latest'=>$r['latest']];}
@@ -174,11 +202,11 @@ function da_load($directory, $query, $now) {
             // Insertion order would sort the entire retained time range and
             // promote delayed log records above newer observed traffic.
             $v['traffic'] = da_rows($db, 'SELECT body FROM events WHERE '.$webwhere.' ORDER BY time DESC,id DESC LIMIT 100', $webparams);
-            $v['destinations'] = da_rows($db, "SELECT json_extract(body,'$.destination') AS destination,json_extract(body,'$.destination_port') AS port,json_extract(body,'$.protocol') AS protocol,sum(action='pass') AS pass,sum(action='block') AS block,count(*) AS n,count(DISTINCT client) AS clients FROM events WHERE ".$webwhere.' GROUP BY destination,port,protocol ORDER BY n DESC LIMIT 100', $webparams);
+            $v['destinations'] = da_rows($db, "SELECT json_extract(body,'$.destination') AS destination,json_extract(body,'$.destination_port') AS port,json_extract(body,'$.protocol') AS protocol,sum(action='pass') AS pass,sum(action='block') AS block,count(*) AS n,count(DISTINCT client) AS clients FROM events WHERE ".$webSummary.' GROUP BY destination,port,protocol ORDER BY n DESC LIMIT 100', $webparams);
         }
         if (in_array($v['view'],['overview','blocks'],true)) {
             $limit=$v['view']==='overview'?5:100;
-            $v['blocks'] = da_rows($db, "SELECT json_extract(body,'$.destination') AS destination,tracker,count(*) AS n,count(DISTINCT client) AS clients,max(time) AS latest FROM events WHERE ".$webwhere." AND action='block' GROUP BY destination,tracker ORDER BY n DESC,destination,tracker LIMIT ".$limit, $webparams);
+            $v['blocks'] = da_rows($db, "SELECT json_extract(body,'$.destination') AS destination,tracker,count(*) AS n,count(DISTINCT client) AS clients,max(time) AS latest FROM events WHERE ".$webSummary." AND action='block' GROUP BY destination,tracker ORDER BY n DESC,destination,tracker LIMIT ".$limit, $webparams);
         }
         // Independent aggregates let SQLite seek the endpoints of the time index.
         $v['retention'] = da_rows($db, 'SELECT (SELECT min(time) FROM events) AS oldest,(SELECT max(time) FROM events) AS newest,(SELECT count(*) FROM events) AS n', [])[0];
