@@ -45,12 +45,13 @@ class HourlyCounts:
             columns=','.join(DIMENSIONS)
             sql='INSERT INTO hourly_counts ('+columns+',n,first_seen,last_seen) VALUES ('+','.join('?' for _ in range(14))+') ON CONFLICT('+columns+') DO UPDATE SET n=hourly_counts.n+excluded.n,first_seen=MIN(hourly_counts.first_seen,excluded.first_seen),last_seen=MAX(hourly_counts.last_seen,excluded.last_seen)'
             self.db.executemany(sql,[(*key,*value) for key,value in grouped.items()])
-        self.prune(now)
+        self.prune(now,len(grouped))
 
-    def prune(self,now):
-        self.db.execute('DELETE FROM hourly_counts WHERE bucket < ?',(self.floor(now),))
+    def prune(self,now,incoming=0):
+        batch=512+incoming
+        self.db.execute('DELETE FROM hourly_counts WHERE id IN (SELECT id FROM hourly_counts WHERE bucket < ? ORDER BY bucket LIMIT ?)',(self.floor(now),batch))
         count=self.db.execute('SELECT count(*) FROM hourly_counts').fetchone()[0]
-        excess=max(0,count-self.max_groups)
+        excess=min(max(0,count-self.max_groups),batch)
         if excess:
             ids=self.db.execute('SELECT id,n FROM hourly_counts ORDER BY bucket,last_seen,id LIMIT ?',(excess,)).fetchall()
             self.db.executemany('DELETE FROM hourly_counts WHERE id=?',[(row[0],) for row in ids])

@@ -35,6 +35,18 @@ happens to new traffic. Shared CDN addresses can match several domains.
 
 Lists accept up to 2,048 exact names and wildcard patterns per alias. The editor accepts 64 KiB of text per save, and the full saved policy list is limited to 256 KiB of JSON. Before downgrading to 0.2.43 or earlier, split aliases with more than 256 entries and update their firewall references.
 
+## Reporting history
+
+Open **Firewall > DNS Aliases > Settings** to select the reporting budget.
+The default is 20,000 raw events and a 64 MiB database. A larger budget retains
+more observations within the 24-hour reporting window. The current event and
+hourly-group limits and the oldest retained observations appear under **Coverage**.
+Increasing the budget affects future observations. Reducing it removes older
+records in batches, and SQLite reuses the allocated disk space.
+DNS answers used by firewall aliases keep their own remaining TTL regardless
+of the reporting budget. Versions with a fixed 64 MiB limit cannot open a
+larger reporting database, even after reducing the setting.
+
 ## Qualification
 
 Resolver reload, native upgrade and removal were tested with the original

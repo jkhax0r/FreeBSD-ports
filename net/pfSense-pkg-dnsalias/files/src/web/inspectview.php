@@ -151,7 +151,7 @@ function da_recent_names_render($v) {
                      is_numeric($r['furthest_expiry'])?da_time($r['furthest_expiry']):'Unavailable'];
         }
         da_table(['Query name','Answer owner','Type','Address / name','Client','Records','Latest','Furthest recorded RR expiry'],$rows,'da-inspect-table');
-        echo '<p class="da-footnote">Typed A/AAAA/CNAME from trusted resolver callbacks before encoding; not proof of client delivery. Each record keeps its remaining expiry where qualified. These are historical RR observations, not current PF membership or CNAME-chain leases. Shared IPs do not prove HTTPS hostname use. History is capped at 20,000 answer records and follows reply retention; older evidence is not reconstructed.</p></div>';
+        echo '<p class="da-footnote">Typed A/AAAA/CNAME from trusted resolver callbacks before encoding; not proof of client delivery. Each record keeps its remaining expiry where qualified. These are historical RR observations, not current PF membership or CNAME-chain leases. Shared IPs do not prove HTTPS hostname use. The reporting history setting limits saved answer records. Older evidence can expire or be evicted.</p></div>';
         $rows=[];
     }
     echo '<div class="da-panel da-recent-mappings"><div class="da-panel-title"><h2>'.($domain?'Recent answers / names':'Recently resolved from these names').'</h2><span class="da-muted">Latest 50 groups · selected time window</span></div>';

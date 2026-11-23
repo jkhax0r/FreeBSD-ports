@@ -158,8 +158,9 @@ function da_alias_members_model(string $directory,array $policy,array $service,i
     $v['members']=array_keys($v['members']);$db=null;
     try{
         $path=$directory.'/events.sqlite';
-        if(is_link($path)||!is_file($path)||filesize($path)>67108864)throw new RuntimeException('Telemetry unavailable');
+        $file_bytes=da_history_file_size($path);
         $db=new SQLite3($path,SQLITE3_OPEN_READONLY);$db->enableExceptions(true);$db->busyTimeout(250);
+        da_check_large_history($db,$file_bytes);
         $patterns=da_alias_report_patterns($policy['names']);
         // Retention may run between name discovery and the domain totals.
         $db->exec('BEGIN');

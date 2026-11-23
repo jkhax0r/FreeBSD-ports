@@ -90,6 +90,26 @@ function da_alias_save_identity(string $input,?string $original,array $policies)
         throw new RuntimeException('DNS alias da_'.$name.' already exists. Use Edit to change it.');
     return $name;
 }
+function da_history_settings(?string $size=null): array {
+    $root='/usr/local/libexec/dnsalias';
+    $command=['/usr/local/bin/python3.11','-B',$root.'/dnsalias/lifecycle.py','operator','historylimits'];
+    $command=array_merge($command,$size===null?['get']:['set',$size]);
+    $p=proc_open($command,[0=>['pipe','r'],1=>['pipe','w'],2=>['pipe','w']],$pipes,$root);
+    if(!is_resource($p))throw new RuntimeException('History settings unavailable');
+    fclose($pipes[0]);$out=stream_get_contents($pipes[1],4097);fclose($pipes[1]);
+    stream_get_contents($pipes[2],4097);fclose($pipes[2]);
+    if(proc_close($p)!==0||strlen($out)>4096)throw new RuntimeException('Cannot read or save the history size. Refresh to check the current setting.');
+    return json_decode($out,true,8,JSON_THROW_ON_ERROR);
+}
+function da_history_settings_form(array $settings,bool $can): void {
+    echo '<form class="da-alias-form" method="post" action="dnsalias_status.php?view=aliases&amp;settings=1"><label>Reporting history<select name="history_size"'.($can?'':' disabled').'>';
+    foreach($settings['profiles'] as $events=>[$mib,$groups]){
+        echo '<option value="'.(int)$events.'"'.((int)$events===$settings['events']?' selected':'').'>'.number_format((int)$events).' events · '.number_format($mib).' MiB</option>';
+    }
+    echo '</select></label><p class="da-help">Keeps up to 24 hours. Busy networks can reach the event or storage limit sooner. Larger histories make full-day reports slower. Choosing a smaller size discards older reports gradually. SQLite reuses the freed space.</p>';
+    if($can)echo '<button class="da-primary" name="alias_op" value="history">Save history size</button>';
+    echo '</form>';
+}
 function da_alias_delete_command(string $action,string $name): array {
     if(!in_array($action,['review','remove'],true)||!preg_match('/^[a-z][a-z0-9_]{0,22}$/D',$name))throw new RuntimeException('Invalid alias deletion');
     $p=proc_open(['/usr/local/bin/python3.11','-B','-m','dnsalias.policydelete',$action,$name],[0=>['pipe','r'],1=>['pipe','w'],2=>['pipe','w']],$pipes,'/usr/local/libexec/dnsalias');
@@ -219,6 +239,8 @@ function da_saved_aliases_render(array $policies,array $service,bool $can,string
         if($error!=='')echo '<p class="da-error">'.da_h($error).'</p>';
         if($can)echo '<form class="da-alias-form" method="post" action="dnsalias_status.php?view=aliases&amp;settings=1"><label class="da-check"><input type="checkbox" name="service_enabled" value="1" '.(dnsalias_service_enabled()?'checked':'').'> Enable DNS Alias</label><p class="da-help">Run the service now and after reboot. Disabling empties DNS alias tables; ordinary firewall rules stay saved.</p><div class="da-form-actions"><button class="da-primary" name="alias_op" value="settings">Save settings</button><a href="status_services.php">Status → Services ↗</a></div></form>';
         echo '<p class="da-footnote">Use Status → Services for start, stop and restart. Alias names and patterns are managed separately.</p>';
+        try { da_history_settings_form(da_history_settings(),$can); }
+        catch(Throwable $e){echo '<p class="da-error">Reporting history settings are unavailable.</p>';}
         echo '<details class="da-domain-aliases"><summary>Preferences backup</summary><p>Download saved alias names and all domain reviews/tags. Firewall rules are included in pfSense’s configuration backup. Logs and learned IPs are excluded.</p><p><a href="dnsalias_status.php?preferences_export=1">Download preferences backup</a></p></details></div>';return;
     }
     if(isset($_GET['edit_alias'])){
@@ -271,7 +293,7 @@ function da_saved_aliases_render(array $policies,array $service,bool $can,string
     echo '<p class="da-footnote">Feed updated '.da_h(da_when($health['updated'])).'. PF membership checked '.da_h(da_when($service['membership_observed_utc']??null)).'.</p>';
     if(!$health['running'])echo '<p class="da-footnote">Saved enable settings do not prove that replies are currently updating tables. Live membership and feed status are separate observations.</p>';
     if(!empty($service['telemetry']['dropped']))echo '<p class="da-footnote">DNS statistics missed '.da_h($service['telemetry']['dropped']).' observations. Table synchronization does not wait for statistics storage.</p>';
-    echo '<p class="da-alias-toolbar"><a href="dnsalias_status.php?view=aliases&amp;settings=1">Service settings</a> · <a href="status_services.php">Status → Services ↗</a></p>';
+    echo '<p class="da-alias-toolbar"><a href="dnsalias_status.php?view=aliases&amp;settings=1">Settings</a> · <a href="status_services.php">Status → Services ↗</a></p>';
     $members=$service['tables']??[];
     echo '<table class="da-table"><thead><tr><th>Alias / PF table</th><th>Names and patterns</th><th>State</th><th>Live IPs</th><th>Rule references</th><th></th></tr></thead><tbody>';
     foreach($policies as $p){

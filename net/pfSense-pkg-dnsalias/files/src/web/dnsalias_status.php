@@ -24,6 +24,7 @@ if (($_GET['client_identity']??null)==='1' && ($_SERVER['REQUEST_METHOD']??'GET'
 }
 require_once("/usr/local/libexec/dnsalias/web/control.php");
 require_once("/usr/local/libexec/dnsalias/web/policies.php");
+if (!$_GET && ($_SERVER['REQUEST_METHOD']??'GET')==='GET') $_GET['view']='aliases';
 if(isset($_GET['alias_popup'])&&($_SERVER['REQUEST_METHOD']??'GET')==='GET'){
     header('Content-Type: application/json; charset=utf-8');header('Cache-Control: no-store');header('X-Content-Type-Options: nosniff');
     try{
@@ -76,6 +77,10 @@ try {
             $selected=null;foreach(dnsalias_policies_read() as $p)if($p['name']===$_POST['alias_name'])$selected=$p;
             if($selected===null)throw new RuntimeException('Saved DNS alias not found');
             dnsalias_policies_save($selected['name'],array_merge($selected['names'],[$_POST['alias_domain']]),$selected['enabled']);if(dnsalias_service_enabled())da_alias_service('start');
+        }elseif($_POST['alias_op']==='history'){
+            $size=$_POST['history_size']??null;
+            if(!is_string($size)||!ctype_digit($size)||strlen($size)>7)throw new InvalidArgumentException('Choose a history size');
+            da_history_settings($size);
         }elseif($_POST['alias_op']==='settings'){
             $enabled=isset($_POST['service_enabled']);dnsalias_service_save($enabled);
             if($enabled){da_alias_service('boot_enable');da_alias_service('service_start');}
@@ -85,7 +90,7 @@ try {
             da_alias_delete($_POST['alias_name']);
         }elseif(in_array($_POST['alias_op'],['start','stop','boot_enable','boot_disable'],true)){da_alias_service($_POST['alias_op']);}
         else throw new RuntimeException('Unknown alias action');
-        header('Location: dnsalias_status.php?view=aliases'.($_POST['alias_op']==='settings'?'&settings=1':''),true,303);exit;
+        header('Location: dnsalias_status.php?view=aliases'.(in_array($_POST['alias_op'],['settings','history'],true)?'&settings=1':''),true,303);exit;
     }
 }catch(Throwable $e){$da_alias_error=$e->getMessage();}
 $da_alias_ns=0;

@@ -231,7 +231,7 @@ def entry():
         parsed=parser.parse_args(args);data=Path(parsed.data_dir);arguments=['--data-dir',str(data),'--duration',str(parsed.duration)]
         module='dnsalias.collector';control=False
     elif kind=='operator':
-        if root!=Path('/usr/local/libexec/dnsalias') or not args or args[0] not in ('manage','webupgrade','policydelete','plainsetup','preferenceimport','counterram'):
+        if root!=Path('/usr/local/libexec/dnsalias') or not args or args[0] not in ('manage','webupgrade','policydelete','plainsetup','preferenceimport','counterram','historylimits'):
             raise ValueError('canonical native operator entry required')
         name=args.pop(0);data=Path('/var/db/dnsalias');arguments=args
         module='manage' if name=='manage' else 'dnsalias.'+name

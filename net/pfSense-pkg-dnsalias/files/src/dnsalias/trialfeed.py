@@ -142,21 +142,37 @@ class FeedTelemetry:
                         if hasattr(store, 'db'):
                             store.db.execute('PRAGMA busy_timeout=100')
                         draining = True
-                    started = time.monotonic()
-                    try:self.counters['persisted']+=store.insert(events)
-                    except sqlite3.OperationalError as exc:
-                        code=getattr(exc,'sqlite_errorcode',0)&255
-                        if code not in (sqlite3.SQLITE_BUSY,sqlite3.SQLITE_LOCKED) or store.db.in_transaction:raise
-                        # EventStore's transaction context has rolled back.
-                        # Drop this batch once, never replay an uncertain write.
-                        # Fresh later observations can proceed after contention.
-                        self.losses['database_busy'] += len(events)
-                        self.counters['dropped'] += len(events)
-                        self._record_database_busy('insert', started, len(events))
+                    self._persist(store,events)
         except Exception as exc:
             self.error=type(exc).__name__
         finally:
             if store is not None:store.close()
+
+    def _persist(self, store, events):
+        started = time.monotonic()
+        retried = False
+        while True:
+            try:
+                saved = store.insert(events)
+            except sqlite3.OperationalError as error:
+                code = getattr(error, 'sqlite_errorcode', 0) & 255
+                if code not in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED) or store.db.in_transaction:
+                    raise
+                # Large reports can hold a read lock beyond one storage wait.
+                # Retry only a known rollback, in this background worker.
+                # Keep the same bounded batch and interrupt the wait on Stop.
+                if (getattr(store, 'max_events', 0) > 100000
+                        and time.monotonic() - started < 6 and not self.stop.wait(.05)):
+                    retried = True
+                    continue
+                self.losses['database_busy'] += len(events)
+                self.counters['dropped'] += len(events)
+                self._record_database_busy('insert', started, len(events))
+            else:
+                self.counters['persisted'] += saved
+                if retried:
+                    self._record_database_busy('insert', started, 0)
+            return
 
     def _record_database_busy(self, operation, started, dropped):
         self.counters['busy_batches'] += 1

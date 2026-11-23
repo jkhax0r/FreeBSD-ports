@@ -54,6 +54,12 @@ def records(event):
     return rows
 
 
+def trim_answers(db, limit, incoming):
+    count=db.execute('SELECT count(*) FROM reply_answers').fetchone()[0]
+    excess=min(max(0,count+incoming-limit), incoming+512)
+    if excess:
+        db.execute('DELETE FROM reply_answers WHERE (event_id,ordinal) IN (SELECT event_id,ordinal FROM reply_answers ORDER BY event_id,ordinal LIMIT ?)',(excess,))
+
 class AnswerHistory:
     def __init__(self,db,limit=MAX_RECORDS):
         if type(limit) is not int or not 1<=limit<=MAX_RECORDS:raise ValueError('bounded answer history required')
@@ -69,10 +75,7 @@ class AnswerHistory:
         return rows,total
 
     def reserve(self,incoming):
-        count=self.db.execute('SELECT count(*) FROM reply_answers').fetchone()[0]
-        excess=max(0,count+incoming-self.limit)
-        if excess:
-            self.db.execute('DELETE FROM reply_answers WHERE (event_id,ordinal) IN (SELECT event_id,ordinal FROM reply_answers ORDER BY event_id,ordinal LIMIT ?)',(excess,))
+        trim_answers(self.db,self.limit,incoming)
 
     def insert(self,event_id,rows):
         if rows:

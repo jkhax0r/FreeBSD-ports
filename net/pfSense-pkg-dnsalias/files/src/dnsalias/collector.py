@@ -18,6 +18,7 @@ import subprocess
 import time
 from . import __version__
 from .rollups import HourlyCounts
+from . import historylimits
 
 MAX_DB_BYTES = 64 * 1024 * 1024
 MAX_EVENTS = 20000
@@ -47,8 +48,12 @@ def write_json(path, value):
 
 
 class EventStore:
-    def __init__(self, path, session, max_events=MAX_EVENTS, max_db_bytes=MAX_DB_BYTES, max_hourly_groups=20000, busy_timeout_ms=1000, reply_details=False):
+    def __init__(self, path, session, max_events=None, max_db_bytes=None, max_hourly_groups=None, busy_timeout_ms=1000, reply_details=False):
         self.path, self.session = Path(path), session
+        self.configurable = max_events is None and max_db_bytes is None and max_hourly_groups is None
+        max_events = MAX_EVENTS if max_events is None else max_events
+        max_db_bytes = MAX_DB_BYTES if max_db_bytes is None else max_db_bytes
+        max_hourly_groups = 20000 if max_hourly_groups is None else max_hourly_groups
         if type(max_events) is not int or not 1 <= max_events <= MAX_EVENTS:
             raise ValueError("invalid event cap")
         if type(max_db_bytes) is not int or not 32768 <= max_db_bytes <= MAX_DB_BYTES:
@@ -57,7 +62,8 @@ class EventStore:
             raise ValueError("bounded database wait required")
         if type(reply_details) is not bool:raise ValueError('explicit reply history mode required')
         self.answer_history=None
-        if self.path.is_symlink() or (self.path.exists() and self.path.stat().st_size > max_db_bytes):
+        file_limit = historylimits.MAX_BYTES if self.configurable else max_db_bytes
+        if self.path.is_symlink() or (self.path.exists() and self.path.stat().st_size > file_limit):
             raise ValueError("database is a symlink or already exceeds storage cap")
         self.max_events, self.max_db_bytes = max_events, max_db_bytes
         # Protect a bounded part of the existing row budget from packet floods.
@@ -68,6 +74,11 @@ class EventStore:
         self.db = sqlite3.connect(self.path, timeout=1)
         try:
             self.page_size = self.db.execute("PRAGMA page_size").fetchone()[0]
+            if self.configurable:
+                events, peak = historylimits.existing_limits(self.db)
+                if self.path.stat().st_size > historylimits.PROFILES[peak][0] * 1024**2:
+                    raise ValueError("Database exceeds its saved history budget")
+                max_db_bytes = max(historylimits.PROFILES[events][0] * 1024**2, self.path.stat().st_size)
             self.max_pages = max_db_bytes // self.page_size
             actual = self.db.execute(f"PRAGMA max_page_count={self.max_pages}").fetchone()[0]
             if actual != self.max_pages:
@@ -77,6 +88,8 @@ class EventStore:
             self.db.execute("PRAGMA cache_size=-8192")
             self.db.execute(f"PRAGMA busy_timeout={busy_timeout_ms}")
             self.db.execute('BEGIN IMMEDIATE')
+            if self.configurable:
+                self.db.execute(historylimits.TABLE)
             self.db.execute("CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, session TEXT NOT NULL, time REAL NOT NULL, kind TEXT NOT NULL, client TEXT, domain TEXT, tracker TEXT, action TEXT, body TEXT NOT NULL)")
             self.db.execute("CREATE INDEX IF NOT EXISTS event_time ON events(time)")
             self.db.execute("CREATE INDEX IF NOT EXISTS event_client ON events(client,time)")
@@ -101,6 +114,8 @@ class EventStore:
             if reply_details:
                 from .answerhistory import AnswerHistory
                 self.answer_history=AnswerHistory(self.db)
+            if self.configurable:
+                self._apply_history_limits()
             self.db.commit()
             self._prepare_packet_address_index()
             os.chmod(self.path,0o600)
@@ -134,6 +149,31 @@ class EventStore:
             if (error.sqlite_errorcode & 255) not in (sqlite3.SQLITE_FULL, sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
                 raise
 
+    def _apply_history_limits(self):
+        # Read under the same writer transaction as eviction. Both event
+        # producers then switch profiles in save order, including on retries.
+        events, _ = historylimits.read_limits(self.db)
+        size, groups = historylimits.PROFILES[events]
+        budget = size * 1024**2
+        if getattr(self, '_applied_history_events', None) == events:
+            return
+        pages = self.db.execute("PRAGMA page_count").fetchone()[0]
+        target_pages = max(pages, budget // self.page_size)
+        self.max_pages = self.db.execute(f"PRAGMA max_page_count={target_pages}").fetchone()[0]
+        if self.max_pages != target_pages:
+            raise ValueError("Cannot apply the statistics page budget")
+        self.max_events, self.max_db_bytes = events, budget
+        self.dns_reserved_events = events // 4
+        self.hourly.max_groups = groups
+        if self.answer_history is not None:
+            self.answer_history.limit = events
+        self._applied_history_events = events
+
+    def _begin_history_write(self):
+        if self.configurable:
+            self.db.execute("BEGIN IMMEDIATE")
+            self._apply_history_limits()
+
     def insert(self, events, now=None):
         if len(events) > min(MAX_BATCH_EVENTS,self.max_events):
             raise ValueError("batch limit")
@@ -145,6 +185,7 @@ class EventStore:
         # Eviction and insertion share one transaction. SQLITE_FULL or any other
         # write failure rolls both back; old rows are not lost by a failed batch.
         with self.db:
+            self._begin_history_write()
             incoming_dns=sum(e['kind'] in DNS_HISTORY_KINDS for e in eligible)
             self._trim(now, self.max_events-len(rows),max(0,self.dns_reserved_events-incoming_dns))
             insert="INSERT INTO events(session,time,kind,client,domain,tracker,action,body) VALUES (?,?,?,?,?,?,?,?)"
@@ -158,9 +199,16 @@ class EventStore:
         return len(rows)
 
     def _trim(self, now, keep, reserve=None):
-        self.db.execute("DELETE FROM events WHERE time < ?",(now-MAX_AGE_SECONDS,))
+        if self.configurable:
+            self.db.execute("DELETE FROM events WHERE id IN (SELECT id FROM events WHERE time < ? ORDER BY time LIMIT ?)",
+                            (now-MAX_AGE_SECONDS, MAX_BATCH_EVENTS))
+        else:
+            self.db.execute("DELETE FROM events WHERE time < ?",(now-MAX_AGE_SECONDS,))
         count = self.db.execute("SELECT count(*) FROM events").fetchone()[0]
         excess = max(0,count-keep)
+        if self.configurable:
+            # Limit each shrink transaction while allowing room for this batch.
+            excess = min(excess, self.max_events - keep + 512)
         if excess:
             reserve=self.dns_reserved_events if reserve is None else reserve
             if reserve:
@@ -181,9 +229,14 @@ class EventStore:
 
     def prune(self, now):
         with self.db:
+            self._begin_history_write()
             self._trim(now,self.max_events)
             self.hourly.prune(now)
-        if self.path.stat().st_size > self.max_db_bytes:
+            if self.configurable and self.answer_history is None and self.db.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='reply_answers'").fetchone():
+                from .answerhistory import trim_answers
+                trim_answers(self.db,self.max_events,0)
+        if self.path.stat().st_size > self.max_pages * self.page_size:
             raise RuntimeError("database storage cap reached; collector stopped")
 
     def storage(self):
@@ -349,6 +402,7 @@ def run(data_dir, duration, resolver_log="/var/log/resolver.log", filter_log="/v
                 if sample_due or was_busy:
                     store.prune(now)
                     status.update(store.status_counts(), storage_observed_utc=now)
+                    status['limits'].update(max_database_bytes=store.max_db_bytes,max_retained_events=store.max_events)
                 status.pop("storage_busy_since",None)
             except sqlite3.OperationalError as error:
                 # EventStore commits raw rows and hourly counts together. Only

@@ -39,6 +39,18 @@ function da_number($value) {
 }
 // PDO SQLite fetches a prepared aggregate without executing its first step
 // twice. Use a read-only connection for the whole view and its transaction.
+function da_history_file_size(string $path): int {
+    if(is_link($path)||!is_file($path))throw new RuntimeException('Telemetry unavailable');
+    $bytes=filesize($path);
+    if($bytes===false||$bytes>3072*1048576)throw new RuntimeException('Statistics database exceeds its maximum size');
+    return $bytes;
+}
+function da_check_large_history($db,int $bytes): void {
+    if($bytes<=64*1048576)return;
+    $row=da_rows($db,'SELECT peak_events FROM history_retention WHERE id=1',[])[0]??[];
+    $mib=[100000=>256,500000=>1024,1250000=>3072][(int)($row['peak_events']??0)]??0;
+    if($bytes>$mib*1048576)throw new RuntimeException('Statistics database exceeds its saved size');
+}
 function da_event_reader(string $path) {
     if (extension_loaded('pdo_sqlite') && defined('PDO::SQLITE_ATTR_OPEN_FLAGS')) {
         $openFlags = defined('Pdo\Sqlite::ATTR_OPEN_FLAGS') ? Pdo\Sqlite::ATTR_OPEN_FLAGS : PDO::SQLITE_ATTR_OPEN_FLAGS;
@@ -145,8 +157,9 @@ function da_load($directory, $query, $now) {
     $db = null;
     try {
         $path = $directory . '/events.sqlite';
-        if (is_link($path) || !is_file($path) || filesize($path) > 67108864) { throw new RuntimeException('Telemetry unavailable'); }
+        $file_bytes=da_history_file_size($path);
         $db = da_event_reader($path);
+        da_check_large_history($db,$file_bytes);
         if(in_array($v['view'],['overview','clients','client','domains','domain'],true)){
             try{
                 if(da_labels_filter_active($v)&&in_array($v['view'],['overview','client','domains'],true))$v['labels_joined']=da_labels_attach($db,$directory);
