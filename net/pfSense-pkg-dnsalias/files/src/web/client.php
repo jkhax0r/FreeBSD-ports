@@ -62,7 +62,7 @@
     const state={...history.state};delete state.dnsAliasRefreshSearch;delete state.dnsAliasRefreshMembers;
     history.replaceState(state,'');
     if(search && savedSearch?.url===location.href && savedSearch.view===root.dataset.view && typeof savedSearch.text==='string'){
-      search.value=savedSearch.text;applySearch();
+      search.value=savedSearch.text;
     }
     if(root.dataset.view==='aliases' && savedMembers?.url===location.href && Array.isArray(savedMembers.open)){
       const open=new Set(savedMembers.open);
@@ -179,6 +179,8 @@
     if(search?.value)applySearch();
   });
   setTimes();
+  // Match the dates and times visible in the selected time zone.
+  if(search?.value)applySearch();
   const dialog=root.querySelector('#da-event-dialog'), fields=root.querySelector('#da-event-fields');
   root.addEventListener('click',e=>{
     const b=e.target.closest?.('button[data-detail],button[data-detail-delta]');if(!b||!root.contains(b))return;
