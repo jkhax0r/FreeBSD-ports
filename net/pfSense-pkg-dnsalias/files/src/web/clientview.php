@@ -120,7 +120,13 @@ function da_client_render($v,$compact_events=true) {
           $type=$policy?'Policy log':($dns?($b['qtype']??'Unknown'):strtoupper($b['protocol']??'').' / '.($b['destination_port']??''));
           if($reply){$type.=' → '.da_logged_answer($b);}
           if($callback){$type=da_callback_answer_cell($b,true);}
-          $rows[]=[da_time($r['time']),['text'=>$result,'badge'=>$policy?'block':($dns?'neutral':($r['action']??'neutral'))],($dns?da_link($v,$target,['domain'=>$target,'view'=>'domain']):da_destination($v,$target)),$type,$dns?'No rule attached':((($ruleLabel=da_recorded_rule_label($v,$tracker,$r['time']))!=='Unavailable'?$ruleLabel.' / ':'').($tracker?:'Unknown')),['detail'=>$detail,'label'=>$dns?'DNS evidence':'Rule / evidence'],$dns?da_labels_cell($v,$target):['text'=>''],da_policy_review($r['client'],$dns?'domain':'ip',$target,$tracker,$b['destination_port']??null,$b['protocol']??null,$v)];
+          if ($dns) {
+              $rule=['text'=>'N/A','hint'=>'DNS event. Firewall rule matches are shown on logged packets.'];
+          } else {
+              $ruleLabel=da_recorded_rule_label($v,$tracker,$r['time']);
+              $rule=($ruleLabel!=='Unavailable'?$ruleLabel.' / ':'').($tracker?:'Unknown');
+          }
+          $rows[]=[da_time($r['time']),['text'=>$result,'badge'=>$policy?'block':($dns?'neutral':($r['action']??'neutral'))],($dns?da_link($v,$target,['domain'=>$target,'view'=>'domain']):da_destination($v,$target)),$type,$rule,['detail'=>$detail,'label'=>$dns?'DNS evidence':'Rule / evidence'],$dns?da_labels_cell($v,$target):['text'=>''],da_policy_review($r['client'],$dns?'domain':'ip',$target,$tracker,$b['destination_port']??null,$b['protocol']??null,$v)];
       }
       da_table(['Time','Result','DNS name / destination IP','Type / port','Actual rule','Attribution','Review / tags','Quick action'],$rows,'da-client-timeline',$compact_events,0);
       ?><div class="da-pagination"><a href="<?=da_h(da_url($v,['before'=>'','asof'=>'']))?>">Latest activity</a><?php if ($v['next_cursor']!==null): ?><a class="da-feed-link" href="<?=da_h(da_url($v,['before'=>$v['next_cursor'],'asof'=>(string)$v['asof']]))?>">Older activity →</a><?php endif; ?></div><p class="da-footnote">Includes logged fallback blocks outside alias rules. Recent DNS names are context from retained answers, not a hostname verdict. A shared CDN IP may serve many names; an IP policy affects all of them. Packet counts are not HTTP requests or connections.</p>
