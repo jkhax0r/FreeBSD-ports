@@ -54,7 +54,7 @@ class ResolverHandoff:
                 ancestors=self.ancestors,identity=self.identity,snapshot=self.snapshot,
                 credential_directory=self.target['control_directory'],credential_uid=self.target['control_uid'],
                 credential_gid=self.target['control_gid'],credential_id=self.credentials['credential_id'],
-                control_port=self.target['control_port'])
+                control_port=self.target['control_port'],wait_for_status=True)
             self.search.start();self.state='discovering'
         if self.state=='discovering':
             result=self.search.status()

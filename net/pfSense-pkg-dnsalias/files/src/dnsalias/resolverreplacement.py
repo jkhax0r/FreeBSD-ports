@@ -69,12 +69,13 @@ class ResolverReplacement:
 
     def __init__(self,*,old_watch,specs,ancestors,identity,snapshot,
                  credential_directory,credential_uid,credential_gid,credential_id,
-                 control_port,budget_seconds=12):
+                 control_port,budget_seconds=12,wait_for_status=False):
         if (not isinstance(old_watch,ProcessLifetimeWatch) or old_watch.alive()
             or old_watch.state!='exited'):
             raise ValueError('confirmed old resolver exit required')
         if type(budget_seconds) not in (int,float) or not .1<=budget_seconds<=30:
             raise ValueError('bounded read-only replacement search required')
+        if type(wait_for_status) is not bool:raise ValueError('explicit persistent discovery mode required')
         if (type(specs) not in (tuple,list) or not specs or len(specs)>SourceAudit.MAX_FILES
             or any(not isinstance(spec,SourceSpec) for spec in specs)
             or len({s.name for s in specs})!=len(specs)):
@@ -94,7 +95,8 @@ class ResolverReplacement:
         self.identity=copy.deepcopy(identity);self.snapshot=copy.deepcopy(snapshot)
         self.credential_directory=credential_directory
         self.uid,self.gid=credential_uid,credential_gid;self.credential_id=credential_id;self.port=control_port
-        self.budget=budget_seconds;self.cancelled=threading.Event();self.thread=None
+        self.budget=budget_seconds;self.wait_for_status=wait_for_status
+        self.cancelled=threading.Event();self.thread=None
         self.result={'state':'new','pid':None,'error':None,'status_reads':0,
             'runtime_attempts':0,'runtime_transient_failures':0}
 
@@ -137,7 +139,9 @@ class ResolverReplacement:
             control=RuntimeControl(credentials['context'],address='127.0.0.1',port=self.port,
                                    server_certificate_sha256=credentials['server_certificate_sha256'])
             while True:
-                remaining=self._remaining(deadline);result['status_reads']+=1
+                if self.cancelled.is_set():raise InterruptedError('replacement search cancelled')
+                remaining=.2 if self.wait_for_status else self._remaining(deadline)
+                result['status_reads']+=1
                 try:
                     found=status_value(control._read(None,time.monotonic()+min(.2,remaining)))
                 except RuntimeControlError as exc:
@@ -145,11 +149,19 @@ class ResolverReplacement:
                     # malformed response and configuration failures are final.
                     if not isinstance(exc.__cause__,(TimeoutError,ConnectionRefusedError,ConnectionResetError)):
                         raise
-                    self.cancelled.wait(min(self.POLL_SECONDS,self._remaining(deadline)))
+                    if self.wait_for_status and time.monotonic()>=deadline:
+                        self.result=dict(result,waiting_for_status=True)
+                        delay=2
+                    else:
+                        delay=self.POLL_SECONDS if self.wait_for_status else min(self.POLL_SECONDS,self._remaining(deadline))
+                    self.cancelled.wait(delay)
                     continue
                 if found['pid']==self.old_pid:
                     raise ValueError('retired resolver PID cannot be adopted')
                 break
+            # Discovery is read-only. Once the replacement answers authenticated
+            # status, its independent qualification still has a fixed deadline.
+            if self.wait_for_status:deadline=time.monotonic()+self.budget
             self._remaining(deadline)
             with ProcessLifetimeWatch(found['pid']) as watch,SourceAudit(self.specs,ancestor_uids=self.ancestors) as sources:
                 observed=source_identity(sources)
